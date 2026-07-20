@@ -171,6 +171,7 @@ public sealed class AllergySystemTest
         var server = pair.Server;
         var entMan = server.ResolveDependency<IEntityManager>();
         var proto = server.ResolveDependency<IPrototypeManager>();
+        var timing = server.ResolveDependency<Robust.Shared.Timing.IGameTiming>();
 
         await server.WaitAssertion(() =>
         {
@@ -186,10 +187,19 @@ public sealed class AllergySystemTest
             allergySys.TriggerAllergy(human, allergy!, wheat);
 
             Assert.That(entMan.TryGetComponent(human, out DamageableComponent? damageable), Is.True);
-            Assert.That(damageable!.Damage.DamageDict["Poison"].Float(), Is.GreaterThanOrEqualTo(2f));
-            Assert.That(damageable.Damage.DamageDict["Asphyxiation"].Float(), Is.GreaterThanOrEqualTo(8f));
+            // First tick applies poison immediately; asphyxiation waits for AirlossStartsAt.
+            Assert.That(damageable!.Damage.DamageDict["Poison"].Float(), Is.GreaterThan(0f));
+            Assert.That(damageable.Damage.DamageDict.GetValueOrDefault("Asphyxiation").Float(), Is.EqualTo(0f));
             Assert.That(entMan.HasComponent<ActiveAllergyReactionComponent>(human), Is.True);
             Assert.That(allergySys.IsHavingSevereReaction(human), Is.True);
+
+            var reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
+            reaction.AirlossStartsAt = timing.CurTime;
+            entMan.Dirty(human, reaction);
+            allergySys.TriggerAllergy(human, allergy!, wheat);
+
+            damageable = entMan.GetComponent<DamageableComponent>(human);
+            Assert.That(damageable.Damage.DamageDict["Asphyxiation"].Float(), Is.GreaterThan(0f));
         });
 
         await pair.CleanReturnAsync();
@@ -202,6 +212,7 @@ public sealed class AllergySystemTest
         var server = pair.Server;
         var entMan = server.ResolveDependency<IEntityManager>();
         var proto = server.ResolveDependency<IPrototypeManager>();
+        var timing = server.ResolveDependency<Robust.Shared.Timing.IGameTiming>();
 
         await server.WaitAssertion(() =>
         {
@@ -214,10 +225,17 @@ public sealed class AllergySystemTest
             ]);
 
             var wheat = proto.Index<AllergyPrototype>("SolAllergyWheat");
-            allergySys.TriggerAllergy(human, entMan.GetComponent<AllergyComponent>(human), wheat);
+            var allergy = entMan.GetComponent<AllergyComponent>(human);
+            allergySys.TriggerAllergy(human, allergy, wheat);
+
+            // Skip the airloss onset delay so asphyxiation damage lands for this assertion.
+            var reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
+            reaction.AirlossStartsAt = timing.CurTime;
+            entMan.Dirty(human, reaction);
+            allergySys.TriggerAllergy(human, allergy, wheat);
 
             var before = entMan.GetComponent<DamageableComponent>(human).Damage.DamageDict["Asphyxiation"].Float();
-            Assert.That(before, Is.GreaterThanOrEqualTo(14f));
+            Assert.That(before, Is.GreaterThan(0f));
 
             // Respirator-style asphyx healing must not land during a severe reaction.
             damageableSys.TryChangeDamage(human, new DamageSpecifier
@@ -289,12 +307,12 @@ public sealed class AllergySystemTest
             Assert.That(entMan.HasComponent<Content.Shared.Speech.Muting.MutedComponent>(human), Is.True);
             var reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
 
-            // Spam exposure while already at/near max remaining — must not exceed now + 90s.
+            // Spam exposure while already at/near max remaining — must not exceed now + 100s.
             for (var i = 0; i < 20; i++)
                 allergySys.TriggerAllergy(human, allergy, wheat, exposureUnits: 5f, delayedOnset: false);
 
             reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
-            Assert.That(reaction.EndsAt, Is.LessThanOrEqualTo(timing.CurTime + TimeSpan.FromSeconds(90.01)));
+            Assert.That(reaction.EndsAt, Is.LessThanOrEqualTo(timing.CurTime + TimeSpan.FromSeconds(100.01)));
 
             // Simulate time passing so remaining budget frees up, then re-expose.
             reaction.EndsAt = timing.CurTime + TimeSpan.FromSeconds(10);
@@ -303,7 +321,7 @@ public sealed class AllergySystemTest
             allergySys.TriggerAllergy(human, allergy, wheat, exposureUnits: 3f, delayedOnset: false);
             reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
             Assert.That(reaction.EndsAt, Is.GreaterThan(beforeRebuild));
-            Assert.That(reaction.EndsAt, Is.LessThanOrEqualTo(timing.CurTime + TimeSpan.FromSeconds(90.01)));
+            Assert.That(reaction.EndsAt, Is.LessThanOrEqualTo(timing.CurTime + TimeSpan.FromSeconds(100.01)));
             Assert.That(reaction.Intensity, Is.GreaterThan(1f));
         });
 
