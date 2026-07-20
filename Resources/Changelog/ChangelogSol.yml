@@ -264,4 +264,29 @@ Entries:
   id: 560001
   time: '2026-07-19T12:28:14.000000+00:00'
   url: https://github.com/North-Western-Development/space-station-14/pull/56
+- author: AprilCatStreams & Famine
+  changes:
+  - message: Chemical, viro, and virochem lockers have been added thanks to sprites
+      from Famine.
+    type: Add
+  - message: Virovend is now a thing instead of chem+med vend in viro dept thanks
+      to sprites from Famine.
+    type: Add
+  - message: Clandestine machines for the bioterrorist antags now have custom sprites
+      thanks to Famine.
+    type: Add
+  - message: New virology and virology secure crates thanks to sprites by Famine.
+    type: Add
+  - message: Many medical department lockers have been upgraded texture wise thanks
+      to Famine.
+    type: Tweak
+  - message: Allergies now make sense.
+    type: Fix
+  - message: Overdoses now show as a separate item in the guidebook entries for chems.
+    type: Tweak
+  - message: Bioterrorist gameplay is now more complete and logical.
+    type: Tweak
+  id: 570001
+  time: '2026-07-20T12:38:26.000000+00:00'
+  url: https://github.com/North-Western-Development/space-station-14/pull/57
 
