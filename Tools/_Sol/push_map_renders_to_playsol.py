@@ -43,7 +43,11 @@ def http_json(
     headers: dict | None = None,
     timeout: int = 120,
 ):
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    hdrs = {
+        "User-Agent": "SolMapRenderer/1.0 (+https://playsol.us)",
+        **(headers or {}),
+    }
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = resp.read()
         if not body:
@@ -58,7 +62,11 @@ def http_bytes(
     headers: dict | None = None,
     timeout: int = 300,
 ) -> bytes:
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    hdrs = {
+        "User-Agent": "SolMapRenderer/1.0 (+https://playsol.us)",
+        **(headers or {}),
+    }
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 

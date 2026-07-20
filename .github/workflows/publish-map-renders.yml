@@ -93,12 +93,24 @@ jobs:
 
       - name: Render maps
         if: steps.maps.outputs.skip != 'true'
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p map-out
-          # shellcheck disable=SC2086
+          # Write IDs one-per-line so zsh/bash never glue them into one arg
+          python3 Tools/_Sol/map_viewer_maps.py all --json \
+            | python3 -c 'import sys,json; print("\n".join(json.load(sys.stdin)))' \
+            > /tmp/all-maps.txt
+          if [[ "${{ steps.maps.outputs.mode }}" == "all" ]]; then
+            MAPFILE=/tmp/all-maps.txt
+          else
+            printf '%s\n' ${{ steps.maps.outputs.maps }} > /tmp/changed-maps.txt
+            MAPFILE=/tmp/changed-maps.txt
+          fi
+          mapfile -t MAP_IDS < "$MAPFILE"
+          echo "Rendering ${#MAP_IDS[@]} maps: ${MAP_IDS[*]}"
           dotnet run --project Content.MapRenderer --configuration Release --no-build -- \
-            ${{ steps.maps.outputs.maps }} \
+            "${MAP_IDS[@]}" \
             --viewer --parallax --format webp -o ./map-out
 
       - name: Upload maps to PlaySol

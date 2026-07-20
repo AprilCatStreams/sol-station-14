@@ -15,6 +15,13 @@ public sealed class MapViewerData
     public string Name { get; set; } = string.Empty;
     /// <summary>SS14.MapViewer reads displayName for the selector label.</summary>
     public string DisplayName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Default view orientation: primary grid world rotation in radians (SS14, CCW from +X).
+    /// OpenLayers viewers should use <c>-rotation</c> (OL is clockwise-positive).
+    /// </summary>
+    public double Rotation { get; set; }
+
     public List<GridLayer> Grids { get; set; } = new();
     public string? Attributions { get; set; }
     public List<LayerGroup> ParallaxLayers { get; set; } = new();
@@ -28,6 +35,9 @@ public sealed class GridLayer
     public string Url { get; set; }
     public Extent Extent { get; set; }
 
+    /// <summary>World rotation in radians (SS14/CCW) before the grid was zeroed for rendering.</summary>
+    public double Rotation { get; set; }
+
     public GridLayer(RenderedGridImage<Rgba32> gridImage, string url)
     {
         //Get the internal _uid as string
@@ -36,6 +46,7 @@ public sealed class GridLayer
 
         Offset = new Position(gridImage.Offset);
         Extent = new Extent(gridImage.Image.Width, gridImage.Image.Height);
+        Rotation = gridImage.Rotation;
         // MapViewer URLs use forward slashes
         Url = url.Replace('\\', '/');
     }
