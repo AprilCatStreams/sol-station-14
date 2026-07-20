@@ -114,3 +114,4 @@
   desc: reagent-desc-sol-culture-stabilizer
   physicalDesc: reagent-physical-desc-opaque
   color: "#88ccaa"
+  contrabandSeverity: Major

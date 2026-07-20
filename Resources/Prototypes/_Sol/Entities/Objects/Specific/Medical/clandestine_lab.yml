@@ -24,6 +24,9 @@
           Running: { state: running }
           Open: { state: on }
   - type: ClandestineSampleAnalyzer
+  - type: ContainerContainer
+    containers:
+      chamber: !type:Container
   - type: AccessReader
     access: [["SyndicateAgent"], ["Virology"]]
   - type: SolutionContainerManager
@@ -75,6 +78,16 @@
           Running: { visible: false }
           Open: { visible: true }
   - type: ClandestineCultureIncubator
+  - type: ActivatableUI
+    key: enum.CultureIncubatorUiKey.Key
+  - type: ActivatableUIRequiresPower
+  - type: UserInterface
+    interfaces:
+      enum.CultureIncubatorUiKey.Key:
+        type: CultureIncubatorBoundUserInterface
+  - type: ContainerContainer
+    containers:
+      chamber: !type:Container
   - type: AccessReader
     access: [["SyndicateAgent"], ["Virology"]]
   - type: SolutionContainerManager
@@ -118,6 +131,25 @@
           Running: { state: running }
           Open: { state: on }
   - type: ClandestinePathogenSynthesizer
+  - type: ActivatableUI
+    key: enum.PathogenSynthesizerUiKey.Key
+  - type: ActivatableUIRequiresPower
+  - type: UserInterface
+    interfaces:
+      enum.PathogenSynthesizerUiKey.Key:
+        type: PathogenSynthesizerBoundUserInterface
+  - type: ContainerContainer
+    containers:
+      substrateSlot: !type:ContainerSlot
+      geneStorage: !type:Container
+  - type: ItemSlots
+    slots:
+      substrateSlot:
+        name: sol-pathogen-synth-ui-substrate-slot
+        whitelist:
+          components:
+          - PathogenCulture
+        swap: true
   - type: AccessReader
     access: [["SyndicateAgent"], ["Virology"]]
   - type: SolutionContainerManager
@@ -177,6 +209,25 @@
     size: Tiny
   - type: EnvironmentalScraper
     sterile: true
+
+- type: entity
+  parent: [ BaseAmmoProvider, BaseMajorContraband ]
+  id: SolEnvironmentalScraperBox
+  name: environmental scraper dispenser
+  description: Dispenses sterile environmental scrapers for collecting microbial samples.
+  components:
+  - type: Sprite
+    layers:
+    - state: boxwide
+    - state: swab
+  - type: BallisticAmmoProvider
+    whitelist:
+      components:
+      - EnvironmentalScraper
+    proto: SolEnvironmentalScraper
+    capacity: 30
+  - type: Item
+    size: Small
 
 - type: entity
   parent: [ BaseItem, BaseMajorContraband ]
@@ -304,8 +355,7 @@
     - id: SolClandestineCultureIncubatorFlatpack
     - id: SolClandestinePathogenSynthesizerFlatpack
     - id: Multitool
-    - id: SolEnvironmentalScraper
-      amount: 4
+    - id: SolEnvironmentalScraperBox
     - id: SolCultureNutrientBottle
       amount: 2
     - id: SolCultureStabilizerBottle

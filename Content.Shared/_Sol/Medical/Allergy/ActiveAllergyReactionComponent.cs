@@ -18,11 +18,18 @@ public sealed partial class ActiveAllergyReactionComponent : Component
     public AllergySeverity Severity = AllergySeverity.Severe;
 
     /// <summary>
-    /// When damage / airway clamping begins. Set in the future for ingested allergens
+    /// When symptoms / speech struggle begin. Set in the future for ingested allergens
     /// so onset lags ~1–2 seconds behind the taste warning.
     /// </summary>
     [DataField(customTypeSerializer: typeof(TimeOffsetSerializer)), AutoNetworkedField, AutoPausedField]
     public TimeSpan DamageStartsAt;
+
+    /// <summary>
+    /// When asphyxiation damage and hard airway clamping begin.
+    /// Delayed slightly after <see cref="DamageStartsAt"/> so choking is felt before airloss ticks.
+    /// </summary>
+    [DataField(customTypeSerializer: typeof(TimeOffsetSerializer)), AutoNetworkedField, AutoPausedField]
+    public TimeSpan AirlossStartsAt;
 
     /// <summary>
     /// When the reaction wears off. Remaining time may be extended by further exposure
@@ -45,6 +52,12 @@ public sealed partial class ActiveAllergyReactionComponent : Component
     /// </summary>
     [DataField, AutoNetworkedField]
     public bool AppliedMute;
+
+    /// <summary>
+    /// Whether stuttering speech struggle was applied for this reaction.
+    /// </summary>
+    [DataField, AutoNetworkedField]
+    public bool AppliedStutter;
 
     /// <summary>
     /// Whether the delayed-onset symptom popup has already been shown for this bout.

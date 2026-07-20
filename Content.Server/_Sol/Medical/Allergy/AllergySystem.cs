@@ -11,10 +11,13 @@ using Content.Shared.Damage;
 using Content.Shared.Damage.Systems;
 using Content.Shared.FixedPoint;
 using Content.Shared.GameTicking;
+using Content.Shared.Mobs;
+using Content.Shared.Mobs.Systems;
 using Content.Shared.Nutrition;
 using Content.Shared.Popups;
 using Content.Shared.Preferences;
 using Content.Shared.Silicons.Borgs.Components;
+using Content.Shared.Speech.EntitySystems;
 using Content.Shared.Speech.Muting;
 using Content.Server.Body.Components;
 using Content.Server._Starlight.Medical.Body.Systems;
@@ -39,6 +42,14 @@ public sealed class AllergySystem : EntitySystem
     /// <summary>IRL-ish lag between tasting an allergen and the airway reaction kicking in.</summary>
     private static readonly TimeSpan IngestOnsetDelay = TimeSpan.FromSeconds(1.5);
 
+    /// <summary>
+    /// After choking onset begins, wait this long before airloss damage / hard airway clamp.
+    /// </summary>
+    private static readonly TimeSpan AirlossDamageDelay = TimeSpan.FromSeconds(1.5);
+
+    /// <summary>How often to refresh stutter while struggling to speak through a closed airway.</summary>
+    private static readonly TimeSpan SpeechStruggleRefresh = TimeSpan.FromSeconds(3);
+
     /// <summary>Base remaining-time added per unit of allergen exposure.</summary>
     private const float MildSecondsPerUnit = 5f;
     private const float ModerateSecondsPerUnit = 6f;
@@ -48,14 +59,21 @@ public sealed class AllergySystem : EntitySystem
     /// <summary>Max remaining reaction time that exposure can build up to.</summary>
     private static readonly TimeSpan MildMaxRemaining = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ModerateMaxRemaining = TimeSpan.FromSeconds(45);
-    private static readonly TimeSpan SevereMaxRemaining = TimeSpan.FromSeconds(75);
-    private static readonly TimeSpan AnaphylaxisMaxRemaining = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan SevereMaxRemaining = TimeSpan.FromSeconds(150);
+    private static readonly TimeSpan AnaphylaxisMaxRemaining = TimeSpan.FromSeconds(100);
 
     private const float MaxIntensity = 3f;
     private const float IntensityPerUnit = 0.35f;
 
-    private const float SevereSaturationDrain = 3f;
-    private const float AnaphylaxisSaturationDrain = 5f;
+    private const float SevereSaturationDrain = 0.5f;
+    private const float AnaphylaxisSaturationDrain = 1f;
+
+    /// <summary>
+    /// Severe keeps full damage in crit (~60s from crit to dead at intensity 1).
+    /// Anaphylaxis is reduced so death takes ~45s after crit.
+    /// </summary>
+    private const float SevereCriticalDamageMultiplier = 1f;
+    private const float AnaphylaxisCriticalDamageMultiplier = 0.67f;
 
     private static readonly ProtoId<AlertPrototype> AllergicChokingAlert = "SolAllergicChoking";
 
@@ -69,6 +87,8 @@ public sealed class AllergySystem : EntitySystem
     [Dependency] private readonly RespiratorSystem _respirator = default!;
     [Dependency] private readonly AlertsSystem _alerts = default!;
     [Dependency] private readonly SharedAllergySystem _sharedAllergy = default!;
+    [Dependency] private readonly MobStateSystem _mobState = default!;
+    [Dependency] private readonly SharedStutteringSystem _stutter = default!;
 
     private readonly Dictionary<EntityUid, TimeSpan> _lastBloodstreamCheck = new();
 
@@ -243,12 +263,8 @@ public sealed class AllergySystem : EntitySystem
         if (ent.Comp.Severity >= AllergySeverity.Severe)
             _alerts.ShowAlert(ent.Owner, AllergicChokingAlert);
 
-        if (ent.Comp.Severity >= AllergySeverity.Anaphylaxis)
-        {
-            EnsureComp<MutedComponent>(ent.Owner);
-            ent.Comp.AppliedMute = true;
-            Dirty(ent);
-        }
+        // Speech struggle / mute apply when onset begins (see UpdateActiveReactions),
+        // not immediately on component add — ingest onset is delayed.
     }
 
     private void OnReactionShutdown(Entity<ActiveAllergyReactionComponent> ent, ref ComponentShutdown args)
@@ -258,6 +274,9 @@ public sealed class AllergySystem : EntitySystem
 
         if (ent.Comp.AppliedMute)
             RemCompDeferred<MutedComponent>(ent.Owner);
+
+        if (ent.Comp.AppliedStutter)
+            _stutter.DoRemoveStutter(ent.Owner);
     }
 
     public override void Update(float frameTime)
@@ -277,13 +296,14 @@ public sealed class AllergySystem : EntitySystem
                 continue;
             }
 
-            // Wait out the onset delay before damage / airway clamping.
+            // Wait out the onset delay before symptoms / speech struggle.
             if (_timing.CurTime < reaction.DamageStartsAt)
                 continue;
 
             if (!reaction.OnsetPopupShown)
             {
                 reaction.OnsetPopupShown = true;
+                ApplySpeechStruggle(uid, reaction);
                 Dirty(uid, reaction);
                 ShowOnsetPopup(uid, reaction.Severity);
             }
@@ -294,13 +314,24 @@ public sealed class AllergySystem : EntitySystem
             reaction.NextTick = _timing.CurTime + ReactionTickInterval;
             Dirty(uid, reaction);
 
+            // Keep speech struggle up for the duration of the bout.
+            if (reaction.Severity >= AllergySeverity.Severe && reaction.Severity < AllergySeverity.Anaphylaxis)
+            {
+                _stutter.DoStutter(uid, SpeechStruggleRefresh, refresh: true);
+                reaction.AppliedStutter = true;
+            }
+            else if (reaction.Severity >= AllergySeverity.Anaphylaxis && !reaction.AppliedMute)
+            {
+                ApplySpeechStruggle(uid, reaction);
+            }
+
             if (!_prototypes.TryIndex(reaction.AllergyId, out AllergyPrototype? allergy))
                 continue;
 
             if (TryComp<AllergyComponent>(uid, out var allergyComp) &&
                 allergyComp.InnateAllergies.Contains(reaction.AllergyId))
             {
-                if (reaction.Severity >= AllergySeverity.Severe)
+                if (reaction.Severity >= AllergySeverity.Severe && _timing.CurTime >= reaction.AirlossStartsAt)
                     ClampAirway(uid, reaction.Severity);
                 continue;
             }
@@ -482,22 +513,39 @@ public sealed class AllergySystem : EntitySystem
             reaction.DamageStartsAt = delayedOnset
                 ? _timing.CurTime + IngestOnsetDelay
                 : _timing.CurTime;
+            reaction.AirlossStartsAt = reaction.DamageStartsAt + AirlossDamageDelay;
             reaction.NextTick = reaction.DamageStartsAt;
             reaction.OnsetPopupShown = !delayedOnset;
+            if (!delayedOnset)
+                ApplySpeechStruggle(uid, reaction);
+        }
+        else if (reaction.AirlossStartsAt == default || reaction.AirlossStartsAt < reaction.DamageStartsAt)
+        {
+            reaction.AirlossStartsAt = reaction.DamageStartsAt + AirlossDamageDelay;
         }
 
         if (reaction.NextTick < reaction.DamageStartsAt)
             reaction.NextTick = reaction.DamageStartsAt;
 
-        if (reaction.Severity >= AllergySeverity.Anaphylaxis && !reaction.AppliedMute)
-        {
-            EnsureComp<MutedComponent>(uid);
-            reaction.AppliedMute = true;
-        }
-
         Dirty(uid, reaction);
         if (reaction.Severity >= AllergySeverity.Severe)
             _alerts.ShowAlert(uid, AllergicChokingAlert);
+    }
+
+    private void ApplySpeechStruggle(EntityUid uid, ActiveAllergyReactionComponent reaction)
+    {
+        if (reaction.Severity >= AllergySeverity.Anaphylaxis)
+        {
+            EnsureComp<MutedComponent>(uid);
+            reaction.AppliedMute = true;
+            return;
+        }
+
+        if (reaction.Severity >= AllergySeverity.Severe)
+        {
+            _stutter.DoStutter(uid, SpeechStruggleRefresh, refresh: true);
+            reaction.AppliedStutter = true;
+        }
     }
 
     private static void GetDurationParams(
@@ -536,14 +584,44 @@ public sealed class AllergySystem : EntitySystem
             _ => allergy.AnaphylaxisDamage,
         };
 
+        var airlossReady = _timing.CurTime >= reaction.AirlossStartsAt;
+
         if (baseDamage.GetTotal() > 0)
         {
             var scaled = baseDamage * reaction.Intensity;
-            _damageable.TryChangeDamage(uid, scaled, interruptsDoAfters: false);
+            if (_mobState.IsCritical(uid))
+            {
+                scaled *= reaction.Severity >= AllergySeverity.Anaphylaxis
+                    ? AnaphylaxisCriticalDamageMultiplier
+                    : SevereCriticalDamageMultiplier;
+            }
+
+            // Choking is felt first; airloss damage waits a beat after onset.
+            if (!airlossReady)
+                scaled = StripAsphyxiation(scaled);
+
+            if (scaled.GetTotal() > 0)
+                _damageable.TryChangeDamage(uid, scaled, interruptsDoAfters: false);
         }
 
-        if (reaction.Severity >= AllergySeverity.Severe)
+        // Don't keep locking a crit patient's airway into hard airloss.
+        if (airlossReady
+            && reaction.Severity >= AllergySeverity.Severe
+            && !_mobState.IsCritical(uid)
+            && !_mobState.IsDead(uid))
+        {
             ClampAirway(uid, reaction.Severity);
+        }
+    }
+
+    private static DamageSpecifier StripAsphyxiation(DamageSpecifier damage)
+    {
+        if (!damage.DamageDict.ContainsKey("Asphyxiation"))
+            return damage;
+
+        var copy = new DamageSpecifier(damage);
+        copy.DamageDict.Remove("Asphyxiation");
+        return copy;
     }
 
     private void ClampAirway(EntityUid uid, AllergySeverity severity)

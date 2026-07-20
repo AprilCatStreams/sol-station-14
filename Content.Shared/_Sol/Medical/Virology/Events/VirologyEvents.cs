@@ -126,6 +126,3 @@ public sealed partial class DiseaseDiagnosisDoAfterEvent : SimpleDoAfterEvent;
 
 [Serializable, NetSerializable]
 public sealed partial class VaccineProductionDoAfterEvent : SimpleDoAfterEvent;
-
-[Serializable, NetSerializable]
-public sealed partial class SampleAnalysisDoAfterEvent : SimpleDoAfterEvent;
