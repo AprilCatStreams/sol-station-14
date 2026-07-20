@@ -162,6 +162,9 @@ namespace Content.MapRenderer.Painters
             var xformQuery = sEntityManager.GetEntityQuery<TransformComponent>();
             var xformSystem = sEntityManager.System<SharedTransformSystem>();
 
+            // Capture in-game world rotations before zeroing grids for axis-aligned painting.
+            var worldRotations = new Dictionary<EntityUid, double>();
+
             await server.WaitPost(() =>
             {
                 var playerEntity = sPlayerManager.Sessions.Single().AttachedEntity;
@@ -180,14 +183,15 @@ namespace Content.MapRenderer.Painters
                 foreach (var (uid, _) in _grids)
                 {
                     var gridXform = xformQuery.GetComponent(uid);
+                    worldRotations[uid] = xformSystem.GetWorldRotation(uid).Theta;
                     xformSystem.SetWorldRotation(gridXform, Angle.Zero);
                 }
             });
 
-            await _pair.RunTicksSync(200); // Starlight-edit
+            // Was RunTicksSync(200) (Starlight); that stalls full-batch runs with no logs.
+            await _pair.RunTicksSync(10);
             await Task.WhenAll(client.WaitIdleAsync(), server.WaitIdleAsync());
 
-            // Starlight-start
             await server.WaitPost(() =>
             {
                 foreach (var (uid, _) in _grids)
@@ -196,7 +200,6 @@ namespace Content.MapRenderer.Painters
                     xformSystem.SetWorldRotation(xform, Angle.Zero);
                 }
             });
-            // Starlight-end
 
             foreach (var (uid, grid) in _grids)
             {
@@ -235,6 +238,7 @@ namespace Content.MapRenderer.Painters
                 {
                     GridUid = uid,
                     Offset = xformSystem.GetWorldPosition(uid),
+                    Rotation = worldRotations.GetValueOrDefault(uid),
                 };
 
                 yield return renderedImage;

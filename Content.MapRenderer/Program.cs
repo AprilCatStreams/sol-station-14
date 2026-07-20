@@ -238,7 +238,11 @@ namespace Content.MapRenderer
 
                         grid.Dispose();
 
-                        mapViewerData.Grids.Add(new GridLayer(renderedGrid, Path.Combine(mapShort, Path.GetFileName(savePath))));
+                        var layer = new GridLayer(renderedGrid, Path.Combine(mapShort, Path.GetFileName(savePath)));
+                        mapViewerData.Grids.Add(layer);
+                        // Primary (first painted) grid sets the default viewer orientation.
+                        if (mapViewerData.Grids.Count == 1)
+                            mapViewerData.Rotation = layer.Rotation;
                         i++;
                     }
                 }
