@@ -1,5 +1,7 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Numerics;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Robust.Shared.ContentPack;
 using Robust.Shared.Utility;
@@ -11,6 +13,8 @@ public sealed class MapViewerData
 {
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    /// <summary>SS14.MapViewer reads displayName for the selector label.</summary>
+    public string DisplayName { get; set; } = string.Empty;
     public List<GridLayer> Grids { get; set; } = new();
     public string? Attributions { get; set; }
     public List<LayerGroup> ParallaxLayers { get; set; } = new();
@@ -32,7 +36,8 @@ public sealed class GridLayer
 
         Offset = new Position(gridImage.Offset);
         Extent = new Extent(gridImage.Image.Width, gridImage.Image.Height);
-        Url = url;
+        // MapViewer URLs use forward slashes
+        Url = url.Replace('\\', '/');
     }
 }
 
@@ -91,15 +96,15 @@ public sealed class Layer
     public Position ParallaxScale { get; set; } = new(0.1f, 0.1f);
 }
 
+/// <summary>
+/// Pixel rect serialized as SS14.MapViewer expects: { "a": { "x", "y" }, "b": { "x", "y" } }.
+/// </summary>
+[JsonConverter(typeof(ExtentJsonConverter))]
 public readonly struct Extent
 {
-    [JsonInclude]
     public readonly float X1;
-    [JsonInclude]
     public readonly float Y1;
-    [JsonInclude]
     public readonly float X2;
-    [JsonInclude]
     public readonly float Y2;
 
     public Extent()
@@ -127,11 +132,50 @@ public readonly struct Extent
     }
 }
 
+public sealed class ExtentJsonConverter : JsonConverter<Extent>
+{
+    public override Extent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var root = doc.RootElement;
+        if (root.TryGetProperty("a", out var a) && root.TryGetProperty("b", out var b))
+        {
+            return new Extent(
+                a.GetProperty("x").GetSingle(),
+                a.GetProperty("y").GetSingle(),
+                b.GetProperty("x").GetSingle(),
+                b.GetProperty("y").GetSingle());
+        }
+
+        // Legacy PascalCase X1/Y1/X2/Y2
+        return new Extent(
+            root.GetProperty("X1").GetSingle(),
+            root.GetProperty("Y1").GetSingle(),
+            root.GetProperty("X2").GetSingle(),
+            root.GetProperty("Y2").GetSingle());
+    }
+
+    public override void Write(Utf8JsonWriter writer, Extent value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WritePropertyName("a");
+        writer.WriteStartObject();
+        writer.WriteNumber("x", value.X1);
+        writer.WriteNumber("y", value.Y1);
+        writer.WriteEndObject();
+        writer.WritePropertyName("b");
+        writer.WriteStartObject();
+        writer.WriteNumber("x", value.X2);
+        writer.WriteNumber("y", value.Y2);
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+}
+
+[JsonConverter(typeof(PositionJsonConverter))]
 public readonly struct Position
 {
-    [JsonInclude]
     public readonly float X;
-    [JsonInclude]
     public readonly float Y;
 
     public Position(float x, float y)
@@ -155,4 +199,37 @@ public readonly struct Position
     {
         return new Position(0, 0);
     }
+}
+
+public sealed class PositionJsonConverter : JsonConverter<Position>
+{
+    public override Position Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.ParseValue(ref reader);
+        var root = doc.RootElement;
+        var x = root.TryGetProperty("x", out var xEl) ? xEl.GetSingle() : root.GetProperty("X").GetSingle();
+        var y = root.TryGetProperty("y", out var yEl) ? yEl.GetSingle() : root.GetProperty("Y").GetSingle();
+        return new Position(x, y);
+    }
+
+    public override void Write(Utf8JsonWriter writer, Position value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("x", value.X);
+        writer.WriteNumber("y", value.Y);
+        writer.WriteEndObject();
+    }
+}
+
+public static class MapViewerJson
+{
+    public static readonly JsonSerializerOptions Options = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false,
+    };
+
+    public static string Serialize(MapViewerData data) =>
+        JsonSerializer.Serialize(data, Options);
 }

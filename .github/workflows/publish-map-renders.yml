@@ -1,0 +1,116 @@
+name: Publish Map Renders
+
+# Manual full refresh (workflow_dispatch), or auto-render maps changed on merge to Sol/master.
+# Uploads directly to PlaySol /api/v1/maps (same JWT auth as changelog/content) — not via SolDocs-content git.
+concurrency:
+  group: publish-map-renders
+  cancel-in-progress: false
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [Sol, master]
+    paths:
+      - "Resources/Maps/**"
+      - "Resources/Prototypes/_Sol/Maps/**"
+      - "Resources/Prototypes/_Starlight/Maps/**"
+      - "Resources/Textures/Parallaxes/**"
+      - "Content.MapRenderer/**"
+      - "Tools/_Sol/map_viewer_maps.py"
+      - "Tools/_Sol/push_map_renders_to_playsol.py"
+      - ".github/workflows/publish-map-renders.yml"
+
+jobs:
+  render:
+    name: Render & upload maps
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: prod
+    steps:
+      - name: Checkout game repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 2
+
+      - name: Pull engine updates
+        uses: space-wizards/submodule-dependency@v0.1.5
+
+      - name: Update Engine Submodules
+        run: |
+          cd RobustToolbox/
+          git submodule update --init --recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Install zip
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Restore & build MapRenderer
+        run: |
+          dotnet restore
+          dotnet build Content.MapRenderer --configuration Release --no-restore /m
+
+      - name: Resolve maps to render
+        id: maps
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            MODE="all"
+          else
+            MODE="merge"
+          fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+
+          if [[ "$MODE" == "all" ]]; then
+            MAPS=$(python3 Tools/_Sol/map_viewer_maps.py all)
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD || true)
+            echo "Changed files:"
+            echo "$CHANGED"
+            if echo "$CHANGED" | grep -qE 'Resources/Textures/Parallaxes/|Content\.MapRenderer/|Tools/_Sol/map_viewer_maps\.py'; then
+              echo "Tooling/parallax change detected — rendering all eligible maps"
+              MAPS=$(python3 Tools/_Sol/map_viewer_maps.py all)
+            else
+              # Intentionally unquoted: helper accepts multiple path args
+              # shellcheck disable=SC2086
+              MAPS=$(python3 Tools/_Sol/map_viewer_maps.py from-changes $CHANGED)
+            fi
+          fi
+
+          if [[ -z "${MAPS// }" ]]; then
+            echo "No eligible maps to render."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "maps=" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "maps=$MAPS" >> "$GITHUB_OUTPUT"
+            echo "Will render: $MAPS"
+          fi
+
+      - name: Render maps
+        if: steps.maps.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p map-out
+          # shellcheck disable=SC2086
+          dotnet run --project Content.MapRenderer --configuration Release --no-build -- \
+            ${{ steps.maps.outputs.maps }} \
+            --viewer --parallax --format webp -o ./map-out
+
+      - name: Upload maps to PlaySol
+        if: steps.maps.outputs.skip != 'true'
+        env:
+          PLAYSOL_API_BASE: ${{ secrets.PLAYSOL_API_BASE }}
+          PLAYSOL_DEPLOY_SECRET: ${{ secrets.PLAYSOL_DEPLOY_SECRET }}
+          PLAYSOL_AUTH_PATH: ${{ secrets.PLAYSOL_AUTH_PATH }}
+          PLAYSOL_MAPS_UPLOAD_PATH: ${{ secrets.PLAYSOL_MAPS_UPLOAD_PATH }}
+          PLAYSOL_MAPS_INIT_PATH: ${{ secrets.PLAYSOL_MAPS_INIT_PATH }}
+          PLAYSOL_MAPS_LIST_URL: ${{ secrets.PLAYSOL_MAPS_LIST_URL }}
+        run: |
+          python3 Tools/_Sol/push_map_renders_to_playsol.py \
+            --map-out ./map-out \
+            --mode "${{ steps.maps.outputs.mode }}"

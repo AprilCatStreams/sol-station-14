@@ -36,6 +36,6 @@ public sealed class ParallaxOutput
             file.CopyTo(target);
         }
 
-        return fileName;
+        return fileName.Replace('\\', '/');
     }
 }

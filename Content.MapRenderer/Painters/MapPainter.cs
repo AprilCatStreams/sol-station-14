@@ -125,6 +125,7 @@ namespace Content.MapRenderer.Painters
             {
                 Id = mapShort,
                 Name = fullName,
+                DisplayName = fullName,
             };
 
             if (parallaxOutput != null)

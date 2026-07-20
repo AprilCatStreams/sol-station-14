@@ -3,7 +3,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using Content.IntegrationTests;
 using Content.MapRenderer.Painters;
@@ -252,7 +251,7 @@ namespace Content.MapRenderer
 
                 if (arguments.ExportViewerJson)
                 {
-                    var json = JsonSerializer.Serialize(mapViewerData);
+                    var json = MapViewerJson.Serialize(mapViewerData);
                     await File.WriteAllTextAsync(Path.Combine(directory, "map.json"), json);
                 }
 
