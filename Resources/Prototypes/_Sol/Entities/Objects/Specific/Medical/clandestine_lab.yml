@@ -1,4 +1,4 @@
-# Clandestine bioterror laboratory machines and flatpacks (reuse medical sprites).
+# Clandestine bioterror laboratory machines and flatpacks.
 
 - type: entity
   id: SolClandestineSampleAnalyzer
@@ -9,12 +9,20 @@
     mode: SnapgridCenter
   components:
   - type: Sprite
-    sprite: Structures/Machines/diagnoser.rsi
+    sprite: _Sol/Structures/Machines/sample_analyzer.rsi
+    snapCardinals: true
     layers:
     - state: icon
-    - state: unlit
-      shader: unshaded
+      map: ["enum.ClandestineLabVisualLayers.Base"]
   - type: Appearance
+  - type: GenericVisualizer
+    visuals:
+      enum.ClandestineLabVisuals.State:
+        enum.ClandestineLabVisualLayers.Base:
+          Off: { state: icon }
+          On: { state: on }
+          Running: { state: running }
+          Open: { state: on }
   - type: ClandestineSampleAnalyzer
   - type: AccessReader
     access: [["SyndicateAgent"], ["Virology"]]
@@ -44,12 +52,28 @@
     mode: SnapgridCenter
   components:
   - type: Sprite
-    sprite: Structures/Machines/vaccinator.rsi
+    sprite: _Sol/Structures/Machines/culture_incubator.rsi
+    snapCardinals: true
     layers:
-    - state: icon
-    - state: unlit
-      shader: unshaded
+    - state: off
+      map: ["enum.ClandestineLabVisualLayers.Base"]
+    - state: door_open
+      map: ["enum.ClandestineLabVisualLayers.Door"]
+      visible: false
   - type: Appearance
+  - type: GenericVisualizer
+    visuals:
+      enum.ClandestineLabVisuals.State:
+        enum.ClandestineLabVisualLayers.Base:
+          Off: { state: off }
+          On: { state: on }
+          Running: { state: running }
+          Open: { state: open }
+        enum.ClandestineLabVisualLayers.Door:
+          Off: { visible: false }
+          On: { visible: false }
+          Running: { visible: false }
+          Open: { visible: true }
   - type: ClandestineCultureIncubator
   - type: AccessReader
     access: [["SyndicateAgent"], ["Virology"]]
@@ -79,12 +103,20 @@
     mode: SnapgridCenter
   components:
   - type: Sprite
-    sprite: Structures/Machines/vaccinator.rsi
+    sprite: _Sol/Structures/Machines/pathogen_synthesizer.rsi
+    snapCardinals: true
     layers:
-    - state: icon
-    - state: unlit
-      shader: unshaded
+    - state: off
+      map: ["enum.ClandestineLabVisualLayers.Base"]
   - type: Appearance
+  - type: GenericVisualizer
+    visuals:
+      enum.ClandestineLabVisuals.State:
+        enum.ClandestineLabVisualLayers.Base:
+          Off: { state: off }
+          On: { state: on }
+          Running: { state: running }
+          Open: { state: on }
   - type: ClandestinePathogenSynthesizer
   - type: AccessReader
     access: [["SyndicateAgent"], ["Virology"]]

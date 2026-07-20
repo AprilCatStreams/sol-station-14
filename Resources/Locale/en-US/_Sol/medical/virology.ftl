@@ -192,6 +192,15 @@ sol-allergy-symptoms-mild = Your skin itches and your nose begins to run.
 sol-allergy-symptoms-moderate = You feel nauseated as your skin swells and breaks out in hives.
 sol-allergy-symptoms-severe = Your throat tightens and every breath becomes difficult!
 sol-allergy-symptoms-anaphylaxis = Your airway is rapidly closing! You feel faint and cannot breathe!
+sol-allergy-taste-append = , but you're allergic to {$allergy}!
+
+alerts-sol-allergic-choking-name = [color=red]Allergic Reaction[/color]
+alerts-sol-allergic-choking-desc = Your airway is swelling shut. Seek [color=green]epinephrine[/color] or [color=green]antihistamine[/color] treatment.
+
+entity-effect-guidebook-shorten-allergy-reaction = shortens an active allergic reaction by about {NATURALFIXED($seconds, 1)} seconds { $chance ->
+    [1] 
+    *[other] with a {$chance} chance
+}
 
 sol-bioterror-briefing = You are a bioterrorist. Establish a clandestine lab, culture environmental microbes into a custom strain, and deploy physical payloads. Avoid early detection.
 sol-bioterror-briefing-head = You are the Head Bioterrorist. You carry the portable lab flatpacks. Lead the cell, choose a hideout, and coordinate synthesis and deployment.
@@ -211,16 +220,21 @@ sol-bioterror-sample-name = microbial sample ({$source})
 sol-bioterror-lab-unpowered = The machine has no power.
 sol-bioterror-analyzer-result = Analysis: chassis={$chassis}, quality={$quality}, contaminated={$contaminated}, traits={$traits}
 sol-bioterror-analyzer-no-traits = none detected
+sol-bioterror-analyzer-started = Analysis started.
+sol-bioterror-analyzer-busy = The analyzer is busy.
 sol-bioterror-analyzer-examine = Accepts environmental scrapings for trait/chassis analysis.
+sol-bioterror-analyzer-examine-running = Analysis in progress.
 sol-bioterror-incubator-need-analyzed = Insert an analyzed microbial sample.
 sol-bioterror-incubator-busy = The incubator is busy.
 sol-bioterror-incubator-need-nutrient = Add culture nutrient to the machine tank.
 sol-bioterror-incubator-started = Culture cycle started.
-sol-bioterror-incubator-complete = Culture ready.
+sol-bioterror-incubator-complete = Culture ready. Open the incubator to retrieve it.
+sol-bioterror-incubator-retrieved = You retrieve the finished culture.
 sol-bioterror-incubator-spoiled = Power loss spoiled the culture.
 sol-bioterror-incubator-overgrown = An unattended culture overgrew and contaminated the area!
 sol-bioterror-incubator-examine = Needs analyzed samples and nutrient medium.
 sol-bioterror-incubator-examine-running = Culture cycle in progress.
+sol-bioterror-incubator-examine-ready = A finished culture is ready for retrieval.
 sol-bioterror-synth-need-culture = Insert a culture vial, then begin synthesis.
 sol-bioterror-synth-need-chassis = Load a chassis culture first.
 sol-bioterror-synth-need-stabilizer = Add culture stabilizer to the machine tank.
@@ -234,6 +248,7 @@ sol-bioterror-synth-spoiled = Power loss ruined the synthesis batch.
 sol-bioterror-synth-busy = The synthesizer is busy.
 sol-bioterror-synth-begin-verb = Begin synthesis
 sol-bioterror-synth-examine = Pending chassis: {$chassis}. Traits: {$traits}.
+sol-bioterror-synth-examine-running = Synthesis cycle in progress.
 sol-bioterror-ampoule-name = culture ampoule ({$strain})
 sol-bioterror-round-end-agent-name = bioterrorist
 sol-bioterror-roundend-header = Bioterror cell results:

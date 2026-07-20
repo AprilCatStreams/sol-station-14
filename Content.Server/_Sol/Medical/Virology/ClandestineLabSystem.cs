@@ -4,10 +4,12 @@ using Content.Shared._Sol.Medical.Virology;
 using Content.Shared._Sol.Medical.Virology.Components;
 using Content.Shared._Sol.Medical.Virology.Events;
 using Content.Shared.Chemistry.EntitySystems;
+using Content.Shared.DoAfter;
 using Content.Shared.Examine;
 using Content.Shared.FixedPoint;
 using Content.Shared.Interaction;
 using Content.Shared.Popups;
+using Content.Shared.Power;
 using Content.Shared.Verbs;
 using Robust.Shared.Prototypes;
 using Robust.Shared.Timing;
@@ -26,17 +28,28 @@ public sealed class ClandestineLabSystem : EntitySystem
     [Dependency] private readonly PathogenSystem _pathogen = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly MetaDataSystem _meta = default!;
-    [Dependency] private readonly SharedTransformSystem _transform = default!;
+    [Dependency] private readonly SharedDoAfterSystem _doAfter = default!;
+    [Dependency] private readonly SharedAppearanceSystem _appearance = default!;
 
     public override void Initialize()
     {
         base.Initialize();
         SubscribeLocalEvent<ClandestineSampleAnalyzerComponent, AfterInteractUsingEvent>(OnAnalyzerInsert);
+        SubscribeLocalEvent<ClandestineSampleAnalyzerComponent, SampleAnalysisDoAfterEvent>(OnAnalyzerDoAfter);
+        SubscribeLocalEvent<ClandestineSampleAnalyzerComponent, PowerChangedEvent>(OnAnalyzerPowerChanged);
+        SubscribeLocalEvent<ClandestineSampleAnalyzerComponent, ComponentStartup>(OnAnalyzerStartup);
+        SubscribeLocalEvent<ClandestineSampleAnalyzerComponent, ExaminedEvent>(OnAnalyzerExamined);
+
         SubscribeLocalEvent<ClandestineCultureIncubatorComponent, AfterInteractUsingEvent>(OnIncubatorInsert);
+        SubscribeLocalEvent<ClandestineCultureIncubatorComponent, ActivateInWorldEvent>(OnIncubatorActivate);
+        SubscribeLocalEvent<ClandestineCultureIncubatorComponent, PowerChangedEvent>(OnIncubatorPowerChanged);
+        SubscribeLocalEvent<ClandestineCultureIncubatorComponent, ComponentStartup>(OnIncubatorStartup);
+        SubscribeLocalEvent<ClandestineCultureIncubatorComponent, ExaminedEvent>(OnIncubatorExamined);
+
         SubscribeLocalEvent<ClandestinePathogenSynthesizerComponent, AfterInteractUsingEvent>(OnSynthesizerInsert);
         SubscribeLocalEvent<ClandestinePathogenSynthesizerComponent, GetVerbsEvent<AlternativeVerb>>(OnSynthesizerVerbs);
-        SubscribeLocalEvent<ClandestineSampleAnalyzerComponent, ExaminedEvent>(OnAnalyzerExamined);
-        SubscribeLocalEvent<ClandestineCultureIncubatorComponent, ExaminedEvent>(OnIncubatorExamined);
+        SubscribeLocalEvent<ClandestinePathogenSynthesizerComponent, PowerChangedEvent>(OnSynthesizerPowerChanged);
+        SubscribeLocalEvent<ClandestinePathogenSynthesizerComponent, ComponentStartup>(OnSynthesizerStartup);
         SubscribeLocalEvent<ClandestinePathogenSynthesizerComponent, ExaminedEvent>(OnSynthesizerExamined);
     }
 
@@ -57,13 +70,49 @@ public sealed class ClandestineLabSystem : EntitySystem
         }
     }
 
+    private void OnAnalyzerStartup(Entity<ClandestineSampleAnalyzerComponent> machine, ref ComponentStartup args)
+    {
+        UpdateAnalyzerVisuals(machine);
+    }
+
+    private void OnAnalyzerPowerChanged(Entity<ClandestineSampleAnalyzerComponent> machine, ref PowerChangedEvent args)
+    {
+        UpdateAnalyzerVisuals(machine);
+    }
+
+    private void OnIncubatorStartup(Entity<ClandestineCultureIncubatorComponent> machine, ref ComponentStartup args)
+    {
+        UpdateIncubatorVisuals(machine);
+    }
+
+    private void OnIncubatorPowerChanged(Entity<ClandestineCultureIncubatorComponent> machine, ref PowerChangedEvent args)
+    {
+        UpdateIncubatorVisuals(machine);
+    }
+
+    private void OnSynthesizerStartup(Entity<ClandestinePathogenSynthesizerComponent> machine, ref ComponentStartup args)
+    {
+        UpdateSynthesizerVisuals(machine);
+    }
+
+    private void OnSynthesizerPowerChanged(Entity<ClandestinePathogenSynthesizerComponent> machine, ref PowerChangedEvent args)
+    {
+        UpdateSynthesizerVisuals(machine);
+    }
+
     private void OnAnalyzerInsert(Entity<ClandestineSampleAnalyzerComponent> machine, ref AfterInteractUsingEvent args)
     {
         if (!args.CanReach || args.Handled)
             return;
 
-        if (!TryComp<MicrobialSampleComponent>(args.Used, out var sample))
+        if (!TryComp<MicrobialSampleComponent>(args.Used, out _))
             return;
+
+        if (machine.Comp.Processing)
+        {
+            _popup.PopupEntity(Loc.GetString("sol-bioterror-analyzer-busy"), machine, args.User);
+            return;
+        }
 
         if (!_power.IsPowered(machine.Owner))
         {
@@ -71,9 +120,47 @@ public sealed class ClandestineLabSystem : EntitySystem
             return;
         }
 
+        var doAfter = new DoAfterArgs(
+            EntityManager,
+            args.User,
+            machine.Comp.AnalysisDelay,
+            new SampleAnalysisDoAfterEvent(),
+            machine,
+            target: args.Used,
+            used: args.Used)
+        {
+            NeedHand = true,
+            BreakOnMove = true,
+            BreakOnDamage = true,
+            BreakOnHandChange = true,
+            BreakOnDropItem = true,
+        };
+
+        if (!_doAfter.TryStartDoAfter(doAfter))
+            return;
+
+        machine.Comp.Processing = true;
+        Dirty(machine);
+        UpdateAnalyzerVisuals(machine);
         args.Handled = true;
+        _popup.PopupEntity(Loc.GetString("sol-bioterror-analyzer-started"), machine, args.User);
+        MarkMachineDeployed(machine.Owner, analyzer: true);
+    }
+
+    private void OnAnalyzerDoAfter(Entity<ClandestineSampleAnalyzerComponent> machine, ref SampleAnalysisDoAfterEvent args)
+    {
+        machine.Comp.Processing = false;
+        Dirty(machine);
+        UpdateAnalyzerVisuals(machine);
+
+        if (args.Cancelled || args.Handled || args.Target == null)
+            return;
+
+        if (!TryComp<MicrobialSampleComponent>(args.Target.Value, out var sample))
+            return;
+
         sample.Analyzed = true;
-        Dirty(args.Used, sample);
+        Dirty(args.Target.Value, sample);
 
         var traits = sample.Traits.Count == 0
             ? Loc.GetString("sol-bioterror-analyzer-no-traits")
@@ -84,7 +171,7 @@ public sealed class ClandestineLabSystem : EntitySystem
             ("contaminated", sample.Contaminated),
             ("traits", traits)), machine, args.User);
 
-        MarkMachineDeployed(machine.Owner, analyzer: true);
+        args.Handled = true;
     }
 
     private void OnIncubatorInsert(Entity<ClandestineCultureIncubatorComponent> machine, ref AfterInteractUsingEvent args)
@@ -123,8 +210,8 @@ public sealed class ClandestineLabSystem : EntitySystem
             delay *= 1.5f;
         machine.Comp.CycleEndsAt = _timing.CurTime + delay;
         Dirty(machine);
+        UpdateIncubatorVisuals(machine);
 
-        // Stash sample data on machine via temporary component fields through MetaData / pending culture entity.
         var pending = EnsureComp<PendingCultureDataComponent>(machine);
         pending.ChassisId = sample.ChassisId;
         pending.Traits = new List<ProtoId<PathogenTraitPrototype>>(sample.Traits);
@@ -135,6 +222,31 @@ public sealed class ClandestineLabSystem : EntitySystem
         QueueDel(args.Used);
         _popup.PopupEntity(Loc.GetString("sol-bioterror-incubator-started"), machine, args.User);
         MarkMachineDeployed(machine.Owner, incubator: true);
+    }
+
+    private void OnIncubatorActivate(Entity<ClandestineCultureIncubatorComponent> machine, ref ActivateInWorldEvent args)
+    {
+        if (args.Handled || !args.Complex)
+            return;
+
+        if (!machine.Comp.HasFinishedCulture)
+            return;
+
+        if (!TryComp<PendingCultureDataComponent>(machine.Owner, out var pending))
+        {
+            machine.Comp.HasFinishedCulture = false;
+            Dirty(machine);
+            UpdateIncubatorVisuals(machine);
+            return;
+        }
+
+        args.Handled = true;
+        SpawnFinishedCulture(machine, pending);
+        RemComp<PendingCultureDataComponent>(machine.Owner);
+        machine.Comp.HasFinishedCulture = false;
+        Dirty(machine);
+        UpdateIncubatorVisuals(machine);
+        _popup.PopupEntity(Loc.GetString("sol-bioterror-incubator-retrieved"), machine, args.User);
     }
 
     private void OnSynthesizerInsert(Entity<ClandestinePathogenSynthesizerComponent> machine, ref AfterInteractUsingEvent args)
@@ -220,6 +332,7 @@ public sealed class ClandestineLabSystem : EntitySystem
         machine.Comp.CycleInProgress = true;
         machine.Comp.CycleEndsAt = _timing.CurTime + machine.Comp.SynthesisDelay;
         Dirty(machine);
+        UpdateSynthesizerVisuals(machine);
         _popup.PopupEntity(Loc.GetString("sol-bioterror-synth-started"), machine, user);
         MarkMachineDeployed(machine.Owner, synthesizer: true);
     }
@@ -234,6 +347,7 @@ public sealed class ClandestineLabSystem : EntitySystem
                 machine.Comp.CycleInProgress = false;
                 RemComp<PendingCultureDataComponent>(machine.Owner);
                 Dirty(machine);
+                UpdateIncubatorVisuals(machine);
                 TriggerAccident(machine.Owner, "SolPathogenFlu", severity: 0.25f);
                 _popup.PopupEntity(Loc.GetString("sol-bioterror-incubator-spoiled"), machine, machine);
                 return;
@@ -246,21 +360,7 @@ public sealed class ClandestineLabSystem : EntitySystem
             machine.Comp.HasFinishedCulture = true;
             machine.Comp.OvergrowAt = _timing.CurTime + TimeSpan.FromSeconds(45);
             Dirty(machine);
-
-            if (!TryComp<PendingCultureDataComponent>(machine.Owner, out var pending))
-                return;
-
-            var culture = Spawn("SolPathogenCultureVial", Transform(machine).Coordinates);
-            var cultureComp = EnsureComp<PathogenCultureComponent>(culture);
-            cultureComp.ChassisId = pending.ChassisId;
-            cultureComp.Traits = new List<ProtoId<PathogenTraitPrototype>>(pending.Traits);
-            cultureComp.IsChassisCulture = pending.Traits.Count == 0 || pending.ChassisId != null;
-            cultureComp.Viability = Math.Clamp(pending.Quality * (pending.Contaminated ? 0.5f : 1f), 0.1f, 1f);
-            cultureComp.SpoilsAt = _timing.CurTime + TimeSpan.FromMinutes(8);
-            Dirty(culture, cultureComp);
-            RemComp<PendingCultureDataComponent>(machine.Owner);
-            machine.Comp.HasFinishedCulture = false;
-            Dirty(machine);
+            UpdateIncubatorVisuals(machine);
             _popup.PopupEntity(Loc.GetString("sol-bioterror-incubator-complete"), machine, machine);
             return;
         }
@@ -268,10 +368,24 @@ public sealed class ClandestineLabSystem : EntitySystem
         if (machine.Comp.HasFinishedCulture && _timing.CurTime >= machine.Comp.OvergrowAt)
         {
             machine.Comp.HasFinishedCulture = false;
+            RemComp<PendingCultureDataComponent>(machine.Owner);
             Dirty(machine);
+            UpdateIncubatorVisuals(machine);
             TriggerAccident(machine.Owner, "SolPathogenFlu", severity: 0.6f);
             _popup.PopupEntity(Loc.GetString("sol-bioterror-incubator-overgrown"), machine, machine);
         }
+    }
+
+    private void SpawnFinishedCulture(Entity<ClandestineCultureIncubatorComponent> machine, PendingCultureDataComponent pending)
+    {
+        var culture = Spawn("SolPathogenCultureVial", Transform(machine).Coordinates);
+        var cultureComp = EnsureComp<PathogenCultureComponent>(culture);
+        cultureComp.ChassisId = pending.ChassisId;
+        cultureComp.Traits = new List<ProtoId<PathogenTraitPrototype>>(pending.Traits);
+        cultureComp.IsChassisCulture = pending.Traits.Count == 0 || pending.ChassisId != null;
+        cultureComp.Viability = Math.Clamp(pending.Quality * (pending.Contaminated ? 0.5f : 1f), 0.1f, 1f);
+        cultureComp.SpoilsAt = _timing.CurTime + TimeSpan.FromMinutes(8);
+        Dirty(culture, cultureComp);
     }
 
     private void TickSynthesizer(Entity<ClandestinePathogenSynthesizerComponent> machine)
@@ -283,6 +397,7 @@ public sealed class ClandestineLabSystem : EntitySystem
         {
             machine.Comp.CycleInProgress = false;
             Dirty(machine);
+            UpdateSynthesizerVisuals(machine);
             TriggerAccident(machine.Owner, machine.Comp.PendingChassis?.Id ?? "SolPathogenBioagent", severity: 0.5f);
             ClearPending(machine);
             _popup.PopupEntity(Loc.GetString("sol-bioterror-synth-spoiled"), machine, machine);
@@ -293,6 +408,7 @@ public sealed class ClandestineLabSystem : EntitySystem
             return;
 
         machine.Comp.CycleInProgress = false;
+        UpdateSynthesizerVisuals(machine);
 
         if (machine.Comp.PendingChassis == null)
         {
@@ -366,7 +482,6 @@ public sealed class ClandestineLabSystem : EntitySystem
         _pathogen.AddOrIncreaseContamination(machine, pathogenId, 3f * severity);
         EntityManager.System<GridPathogenAtmosphereSystem>().AddAirborneLoad(machine, pathogenId, 4f * severity);
 
-        var coords = _transform.GetMapCoordinates(machine);
         var nearby = new HashSet<EntityUid>();
         // Infect unsealed operators standing on the same tile / nearby via exposure helper.
         var query = EntityQueryEnumerator<Content.Shared.Mobs.Components.MobStateComponent, TransformComponent>();
@@ -427,21 +542,67 @@ public sealed class ClandestineLabSystem : EntitySystem
         return AddComp<BioterrorCellTrackerComponent>(holder);
     }
 
+    private void UpdateAnalyzerVisuals(Entity<ClandestineSampleAnalyzerComponent> machine)
+    {
+        var state = !_power.IsPowered(machine.Owner)
+            ? ClandestineLabVisualState.Off
+            : machine.Comp.Processing
+                ? ClandestineLabVisualState.Running
+                : ClandestineLabVisualState.On;
+        _appearance.SetData(machine.Owner, ClandestineLabVisuals.State, state);
+    }
+
+    private void UpdateIncubatorVisuals(Entity<ClandestineCultureIncubatorComponent> machine)
+    {
+        ClandestineLabVisualState state;
+        if (machine.Comp.HasFinishedCulture)
+            state = ClandestineLabVisualState.Open;
+        else if (machine.Comp.CycleInProgress)
+            state = ClandestineLabVisualState.Running;
+        else if (_power.IsPowered(machine.Owner))
+            state = ClandestineLabVisualState.On;
+        else
+            state = ClandestineLabVisualState.Off;
+
+        _appearance.SetData(machine.Owner, ClandestineLabVisuals.State, state);
+    }
+
+    private void UpdateSynthesizerVisuals(Entity<ClandestinePathogenSynthesizerComponent> machine)
+    {
+        var state = !_power.IsPowered(machine.Owner)
+            ? ClandestineLabVisualState.Off
+            : machine.Comp.CycleInProgress
+                ? ClandestineLabVisualState.Running
+                : ClandestineLabVisualState.On;
+        _appearance.SetData(machine.Owner, ClandestineLabVisuals.State, state);
+    }
+
     private void OnAnalyzerExamined(Entity<ClandestineSampleAnalyzerComponent> ent, ref ExaminedEvent args)
     {
-        args.PushMarkup(Loc.GetString("sol-bioterror-analyzer-examine"));
+        if (ent.Comp.Processing)
+            args.PushMarkup(Loc.GetString("sol-bioterror-analyzer-examine-running"));
+        else
+            args.PushMarkup(Loc.GetString("sol-bioterror-analyzer-examine"));
     }
 
     private void OnIncubatorExamined(Entity<ClandestineCultureIncubatorComponent> ent, ref ExaminedEvent args)
     {
         if (ent.Comp.CycleInProgress)
             args.PushMarkup(Loc.GetString("sol-bioterror-incubator-examine-running"));
+        else if (ent.Comp.HasFinishedCulture)
+            args.PushMarkup(Loc.GetString("sol-bioterror-incubator-examine-ready"));
         else
             args.PushMarkup(Loc.GetString("sol-bioterror-incubator-examine"));
     }
 
     private void OnSynthesizerExamined(Entity<ClandestinePathogenSynthesizerComponent> ent, ref ExaminedEvent args)
     {
+        if (ent.Comp.CycleInProgress)
+        {
+            args.PushMarkup(Loc.GetString("sol-bioterror-synth-examine-running"));
+            return;
+        }
+
         var chassis = ent.Comp.PendingChassis?.Id ?? "none";
         var traits = ent.Comp.PendingTraits.Count == 0 ? "none" : string.Join(", ", ent.Comp.PendingTraits.Select(t => t.Id));
         args.PushMarkup(Loc.GetString("sol-bioterror-synth-examine", ("chassis", chassis), ("traits", traits)));
@@ -449,7 +610,7 @@ public sealed class ClandestineLabSystem : EntitySystem
 }
 
 /// <summary>
-/// Temporary incubator state while a culture cycle runs.
+/// Temporary incubator state while a culture cycle runs or awaits retrieval.
 /// </summary>
 [RegisterComponent]
 public sealed partial class PendingCultureDataComponent : Component

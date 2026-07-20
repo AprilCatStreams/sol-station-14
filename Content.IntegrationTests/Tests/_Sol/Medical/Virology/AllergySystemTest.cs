@@ -187,7 +187,7 @@ public sealed class AllergySystemTest
 
             Assert.That(entMan.TryGetComponent(human, out DamageableComponent? damageable), Is.True);
             Assert.That(damageable!.Damage.DamageDict["Poison"].Float(), Is.GreaterThanOrEqualTo(2f));
-            Assert.That(damageable.Damage.DamageDict["Asphyxiation"].Float(), Is.GreaterThanOrEqualTo(6f));
+            Assert.That(damageable.Damage.DamageDict["Asphyxiation"].Float(), Is.GreaterThanOrEqualTo(8f));
             Assert.That(entMan.HasComponent<ActiveAllergyReactionComponent>(human), Is.True);
             Assert.That(allergySys.IsHavingSevereReaction(human), Is.True);
         });
@@ -217,7 +217,7 @@ public sealed class AllergySystemTest
             allergySys.TriggerAllergy(human, entMan.GetComponent<AllergyComponent>(human), wheat);
 
             var before = entMan.GetComponent<DamageableComponent>(human).Damage.DamageDict["Asphyxiation"].Float();
-            Assert.That(before, Is.GreaterThanOrEqualTo(12f));
+            Assert.That(before, Is.GreaterThanOrEqualTo(14f));
 
             // Respirator-style asphyx healing must not land during a severe reaction.
             damageableSys.TryChangeDamage(human, new DamageSpecifier
@@ -255,6 +255,129 @@ public sealed class AllergySystemTest
             var damageable = entMan.GetComponent<DamageableComponent>(human);
             Assert.That(damageable.Damage.DamageDict["Poison"].Float(), Is.GreaterThan(0f));
             Assert.That(damageable.Damage.DamageDict.GetValueOrDefault("Asphyxiation").Float(), Is.EqualTo(0f));
+            Assert.That(entMan.HasComponent<ActiveAllergyReactionComponent>(human), Is.True);
+            Assert.That(
+                entMan.GetComponent<ActiveAllergyReactionComponent>(human).EndsAt,
+                Is.LessThanOrEqualTo(server.ResolveDependency<Robust.Shared.Timing.IGameTiming>().CurTime + TimeSpan.FromSeconds(30.01)));
+        });
+
+        await pair.CleanReturnAsync();
+    }
+
+    [Test]
+    public async Task AnaphylaxisMutesAndCapsRemainingDuration()
+    {
+        await using var pair = await PoolManager.GetServerClient();
+        var server = pair.Server;
+        var entMan = server.ResolveDependency<IEntityManager>();
+        var proto = server.ResolveDependency<IPrototypeManager>();
+        var timing = server.ResolveDependency<Robust.Shared.Timing.IGameTiming>();
+
+        await server.WaitAssertion(() =>
+        {
+            var human = entMan.Spawn("MobHuman");
+            var allergySys = entMan.System<AllergySystem>();
+            allergySys.ApplyFromPreferences(human,
+            [
+                new CharacterAllergyPreference("SolAllergyWheat", AllergySeverity.Anaphylaxis),
+            ]);
+
+            var wheat = proto.Index<AllergyPrototype>("SolAllergyWheat");
+            var allergy = entMan.GetComponent<AllergyComponent>(human);
+            allergySys.TriggerAllergy(human, allergy, wheat, exposureUnits: 1f, delayedOnset: false);
+
+            Assert.That(entMan.HasComponent<Content.Shared.Speech.Muting.MutedComponent>(human), Is.True);
+            var reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
+
+            // Spam exposure while already at/near max remaining — must not exceed now + 90s.
+            for (var i = 0; i < 20; i++)
+                allergySys.TriggerAllergy(human, allergy, wheat, exposureUnits: 5f, delayedOnset: false);
+
+            reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
+            Assert.That(reaction.EndsAt, Is.LessThanOrEqualTo(timing.CurTime + TimeSpan.FromSeconds(90.01)));
+
+            // Simulate time passing so remaining budget frees up, then re-expose.
+            reaction.EndsAt = timing.CurTime + TimeSpan.FromSeconds(10);
+            entMan.Dirty(human, reaction);
+            var beforeRebuild = reaction.EndsAt;
+            allergySys.TriggerAllergy(human, allergy, wheat, exposureUnits: 3f, delayedOnset: false);
+            reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
+            Assert.That(reaction.EndsAt, Is.GreaterThan(beforeRebuild));
+            Assert.That(reaction.EndsAt, Is.LessThanOrEqualTo(timing.CurTime + TimeSpan.FromSeconds(90.01)));
+            Assert.That(reaction.Intensity, Is.GreaterThan(1f));
+        });
+
+        await pair.CleanReturnAsync();
+    }
+
+    [Test]
+    public async Task IngestedAllergyDelaysDamageOnset()
+    {
+        await using var pair = await PoolManager.GetServerClient();
+        var server = pair.Server;
+        var entMan = server.ResolveDependency<IEntityManager>();
+        var proto = server.ResolveDependency<IPrototypeManager>();
+        var timing = server.ResolveDependency<Robust.Shared.Timing.IGameTiming>();
+
+        await server.WaitAssertion(() =>
+        {
+            var human = entMan.Spawn("MobHuman");
+            var allergySys = entMan.System<AllergySystem>();
+            allergySys.ApplyFromPreferences(human,
+            [
+                new CharacterAllergyPreference("SolAllergyWheat", AllergySeverity.Anaphylaxis),
+            ]);
+
+            var wheat = proto.Index<AllergyPrototype>("SolAllergyWheat");
+            allergySys.TriggerAllergy(
+                human,
+                entMan.GetComponent<AllergyComponent>(human),
+                wheat,
+                exposureUnits: 2f,
+                delayedOnset: true);
+
+            var reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
+            Assert.That(reaction.DamageStartsAt, Is.GreaterThan(timing.CurTime));
+            var asphyx = entMan.GetComponent<DamageableComponent>(human).Damage.DamageDict
+                .GetValueOrDefault("Asphyxiation").Float();
+            Assert.That(asphyx, Is.EqualTo(0f));
+        });
+
+        await pair.CleanReturnAsync();
+    }
+
+    [Test]
+    public async Task ShortenAllergyReactionClearsActiveReaction()
+    {
+        await using var pair = await PoolManager.GetServerClient();
+        var server = pair.Server;
+        var entMan = server.ResolveDependency<IEntityManager>();
+        var proto = server.ResolveDependency<IPrototypeManager>();
+
+        await server.WaitAssertion(() =>
+        {
+            var human = entMan.Spawn("MobHuman");
+            var allergySys = entMan.System<AllergySystem>();
+            allergySys.ApplyFromPreferences(human,
+            [
+                new CharacterAllergyPreference("SolAllergyWheat", AllergySeverity.Severe),
+            ]);
+
+            var wheat = proto.Index<AllergyPrototype>("SolAllergyWheat");
+            allergySys.TriggerAllergy(human, entMan.GetComponent<AllergyComponent>(human), wheat);
+            Assert.That(entMan.HasComponent<ActiveAllergyReactionComponent>(human), Is.True);
+
+            var timing = server.ResolveDependency<Robust.Shared.Timing.IGameTiming>();
+            var reaction = entMan.GetComponent<ActiveAllergyReactionComponent>(human);
+            reaction.EndsAt = timing.CurTime + TimeSpan.FromSeconds(5);
+            entMan.Dirty(human, reaction);
+
+            reaction.EndsAt -= TimeSpan.FromSeconds(12);
+            entMan.Dirty(human, reaction);
+            if (reaction.EndsAt <= timing.CurTime)
+                entMan.RemoveComponent<ActiveAllergyReactionComponent>(human);
+
+            Assert.That(entMan.HasComponent<ActiveAllergyReactionComponent>(human), Is.False);
         });
 
         await pair.CleanReturnAsync();

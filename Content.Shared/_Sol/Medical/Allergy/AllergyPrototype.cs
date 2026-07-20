@@ -53,6 +53,7 @@ public sealed partial class AllergyPrototype : IPrototype
 
     /// <summary>
     /// Per-tick damage while a severe reaction is active. Tuned to outpace respirator recovery.
+    /// A single bite is enough to start a life-threatening bout.
     /// </summary>
     [DataField]
     public DamageSpecifier SevereDamage = new()
@@ -60,7 +61,7 @@ public sealed partial class AllergyPrototype : IPrototype
         DamageDict = new()
         {
             { "Poison", 2 },
-            { "Asphyxiation", 6 },
+            { "Asphyxiation", 8 },
         },
     };
 
@@ -74,7 +75,7 @@ public sealed partial class AllergyPrototype : IPrototype
         DamageDict = new()
         {
             { "Poison", 4 },
-            { "Asphyxiation", 12 },
+            { "Asphyxiation", 14 },
         },
     };
 

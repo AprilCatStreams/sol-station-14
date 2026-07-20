@@ -2,6 +2,7 @@ using System.Linq;
 using Content.Shared._FarHorizons.Damage;
 using Content.Shared._FarHorizons.Silicons.IPC.Components;
 using Content.Shared._Sol.Medical.Allergy;
+using Content.Shared.Alert;
 using Content.Shared.Body.Components;
 using Content.Shared.Chat;
 using Content.Shared.Chemistry.Components;
@@ -14,6 +15,7 @@ using Content.Shared.Nutrition;
 using Content.Shared.Popups;
 using Content.Shared.Preferences;
 using Content.Shared.Silicons.Borgs.Components;
+using Content.Shared.Speech.Muting;
 using Content.Server.Body.Components;
 using Content.Server._Starlight.Medical.Body.Systems;
 using Content.Server.Chat.Systems;
@@ -25,21 +27,37 @@ namespace Content.Server._Sol.Medical.Allergy;
 
 /// <summary>
 /// Mechanical allergy reactions to reagents and foods, seeded from lobby allergy selections.
-/// Severe / anaphylactic reactions apply sustained asphyxiation and block airloss healing
-/// while the reaction is active.
+/// Severe / anaphylactic reactions apply sustained asphyxiation after a short onset delay,
+/// clamp breathing saturation, block airloss healing, and persist until treated or timed out.
 /// </summary>
 public sealed class AllergySystem : EntitySystem
 {
     private static readonly TimeSpan BloodstreamCheckCooldown = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan ReactionTickInterval = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan SevereDuration = TimeSpan.FromSeconds(25);
-    private static readonly TimeSpan AnaphylaxisDuration = TimeSpan.FromSeconds(40);
+    private static readonly TimeSpan SymptomPopupCooldown = TimeSpan.FromSeconds(12);
 
-    /// <summary>
-    /// Saturation drained each severe+ tick so breathing recovery cannot keep up.
-    /// </summary>
-    private const float SevereSaturationDrain = 2.5f;
-    private const float AnaphylaxisSaturationDrain = 4f;
+    /// <summary>IRL-ish lag between tasting an allergen and the airway reaction kicking in.</summary>
+    private static readonly TimeSpan IngestOnsetDelay = TimeSpan.FromSeconds(1.5);
+
+    /// <summary>Base remaining-time added per unit of allergen exposure.</summary>
+    private const float MildSecondsPerUnit = 5f;
+    private const float ModerateSecondsPerUnit = 6f;
+    private const float SevereSecondsPerUnit = 8f;
+    private const float AnaphylaxisSecondsPerUnit = 12f;
+
+    /// <summary>Max remaining reaction time that exposure can build up to.</summary>
+    private static readonly TimeSpan MildMaxRemaining = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ModerateMaxRemaining = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan SevereMaxRemaining = TimeSpan.FromSeconds(75);
+    private static readonly TimeSpan AnaphylaxisMaxRemaining = TimeSpan.FromSeconds(90);
+
+    private const float MaxIntensity = 3f;
+    private const float IntensityPerUnit = 0.35f;
+
+    private const float SevereSaturationDrain = 3f;
+    private const float AnaphylaxisSaturationDrain = 5f;
+
+    private static readonly ProtoId<AlertPrototype> AllergicChokingAlert = "SolAllergicChoking";
 
     [Dependency] private readonly IPrototypeManager _prototypes = default!;
     [Dependency] private readonly DamageableSystem _damageable = default!;
@@ -49,6 +67,8 @@ public sealed class AllergySystem : EntitySystem
     [Dependency] private readonly SharedSolutionContainerSystem _solutions = default!;
     [Dependency] private readonly IGameTiming _timing = default!;
     [Dependency] private readonly RespiratorSystem _respirator = default!;
+    [Dependency] private readonly AlertsSystem _alerts = default!;
+    [Dependency] private readonly SharedAllergySystem _sharedAllergy = default!;
 
     private readonly Dictionary<EntityUid, TimeSpan> _lastBloodstreamCheck = new();
 
@@ -58,6 +78,7 @@ public sealed class AllergySystem : EntitySystem
         SubscribeLocalEvent<AllergyComponent, IngestingEvent>(OnIngesting);
         SubscribeLocalEvent<PlayerSpawnCompleteEvent>(OnPlayerSpawn);
         SubscribeLocalEvent<ActiveAllergyReactionComponent, HealModifyEvent>(OnHealModify);
+        SubscribeLocalEvent<ActiveAllergyReactionComponent, ComponentStartup>(OnReactionStartup);
         SubscribeLocalEvent<ActiveAllergyReactionComponent, ComponentShutdown>(OnReactionShutdown);
     }
 
@@ -81,18 +102,12 @@ public sealed class AllergySystem : EntitySystem
             ApplyFromFreeText(args.Mob, records.Allergies, records.DrugAllergies);
     }
 
-    /// <summary>
-    /// Biological allergies require organic metabolism. Cyborg chassis and IPC bodies are immune.
-    /// </summary>
     public bool CanHaveAllergies(EntityUid target)
     {
         return !HasComp<BorgChassisComponent>(target) &&
                !HasComp<IPCBatteryComponent>(target);
     }
 
-    /// <summary>
-    /// Applies the allergies that a species innately carries, at each allergy's default severity.
-    /// </summary>
     public void ApplyInnateSpeciesAllergies(EntityUid mob, string species)
     {
         if (!CanHaveAllergies(mob))
@@ -116,9 +131,6 @@ public sealed class AllergySystem : EntitySystem
         Dirty(mob, component);
     }
 
-    /// <summary>
-    /// Applies structured lobby allergy selections onto a mob.
-    /// </summary>
     public void ApplyFromPreferences(EntityUid mob, IReadOnlyList<CharacterAllergyPreference> preferences)
     {
         if (preferences.Count == 0 || !CanHaveAllergies(mob))
@@ -149,9 +161,6 @@ public sealed class AllergySystem : EntitySystem
             Dirty(mob, comp);
     }
 
-    /// <summary>
-    /// Maps free-text CD allergy fields onto mechanical allergy prototypes by name/id match.
-    /// </summary>
     public void ApplyFromFreeText(EntityUid mob, string allergies, string drugAllergies)
     {
         if (!CanHaveAllergies(mob))
@@ -170,7 +179,6 @@ public sealed class AllergySystem : EntitySystem
             if (token.Equals("None", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            // Allow "Peanut (Severe)" style tokens produced by the structured editor sync.
             var nameToken = token;
             AllergySeverity? explicitSeverity = null;
             var open = token.LastIndexOf('(');
@@ -211,8 +219,6 @@ public sealed class AllergySystem : EntitySystem
         if (ent.Comp.Severity < AllergySeverity.Severe)
             return;
 
-        // Airway swelling / bronchospasm: asphyxiation (and Airloss group) will not recover
-        // until the reaction ends. Dexalin / respirator recovery are blocked.
         var damage = args.Damage;
         var changed = false;
 
@@ -232,9 +238,26 @@ public sealed class AllergySystem : EntitySystem
             args.Damage = damage;
     }
 
+    private void OnReactionStartup(Entity<ActiveAllergyReactionComponent> ent, ref ComponentStartup args)
+    {
+        if (ent.Comp.Severity >= AllergySeverity.Severe)
+            _alerts.ShowAlert(ent.Owner, AllergicChokingAlert);
+
+        if (ent.Comp.Severity >= AllergySeverity.Anaphylaxis)
+        {
+            EnsureComp<MutedComponent>(ent.Owner);
+            ent.Comp.AppliedMute = true;
+            Dirty(ent);
+        }
+    }
+
     private void OnReactionShutdown(Entity<ActiveAllergyReactionComponent> ent, ref ComponentShutdown args)
     {
         _lastBloodstreamCheck.Remove(ent);
+        _alerts.ClearAlert(ent.Owner, AllergicChokingAlert);
+
+        if (ent.Comp.AppliedMute)
+            RemCompDeferred<MutedComponent>(ent.Owner);
     }
 
     public override void Update(float frameTime)
@@ -254,6 +277,17 @@ public sealed class AllergySystem : EntitySystem
                 continue;
             }
 
+            // Wait out the onset delay before damage / airway clamping.
+            if (_timing.CurTime < reaction.DamageStartsAt)
+                continue;
+
+            if (!reaction.OnsetPopupShown)
+            {
+                reaction.OnsetPopupShown = true;
+                Dirty(uid, reaction);
+                ShowOnsetPopup(uid, reaction.Severity);
+            }
+
             if (_timing.CurTime < reaction.NextTick)
                 continue;
 
@@ -265,9 +299,13 @@ public sealed class AllergySystem : EntitySystem
 
             if (TryComp<AllergyComponent>(uid, out var allergyComp) &&
                 allergyComp.InnateAllergies.Contains(reaction.AllergyId))
+            {
+                if (reaction.Severity >= AllergySeverity.Severe)
+                    ClampAirway(uid, reaction.Severity);
                 continue;
+            }
 
-            ApplyReactionTick(uid, allergy, reaction.Severity);
+            ApplyReactionTick(uid, allergy, reaction);
         }
     }
 
@@ -295,10 +333,12 @@ public sealed class AllergySystem : EntitySystem
 
                 foreach (var reagent in proto.TriggerReagents)
                 {
-                    if (solution.GetTotalPrototypeQuantity(reagent) <= 0)
+                    var qty = solution.GetTotalPrototypeQuantity(reagent);
+                    if (qty <= 0)
                         continue;
 
-                    TriggerAllergy(uid, allergy, proto);
+                    var exposure = Math.Clamp(qty.Float() * 0.25f, 0.5f, 4f);
+                    TriggerAllergy(uid, allergy, proto, exposure, delayedOnset: false);
                     return;
                 }
             }
@@ -319,59 +359,35 @@ public sealed class AllergySystem : EntitySystem
             if (!_prototypes.TryIndex(allergyId, out AllergyPrototype? proto))
                 continue;
 
-            if (!FoodMatchesAllergy(foodId, swallowed, proto))
+            if (!_sharedAllergy.FoodMatchesAllergy(foodId, swallowed, proto))
                 continue;
 
-            TriggerAllergy(eater, allergy, proto);
+            var exposure = _sharedAllergy.GetExposureUnits(swallowed, proto);
+            // Sets PendingTasteAllergyName for the taste popup append.
+            _sharedAllergy.TryGetIngestAllergyName(eater, food, swallowed, out _);
+            TriggerAllergy(eater, allergy, proto, exposure, delayedOnset: true);
             return;
         }
     }
 
     public bool FoodMatchesAllergy(EntProtoId foodId, Solution? swallowed, AllergyPrototype allergy)
     {
-        if (swallowed != null && allergy.TriggerReagents.Any(reagent =>
-                swallowed.GetTotalPrototypeQuantity(reagent) > 0))
-            return true;
-
-        if (allergy.TriggerFoods.Contains(foodId))
-            return true;
-
-        return allergy.TriggerFoodRoots.Any(root => IsPrototypeOrDescendant(foodId, root));
+        return _sharedAllergy.FoodMatchesAllergy(foodId, swallowed, allergy);
     }
 
-    private bool IsPrototypeOrDescendant(EntProtoId foodId, EntProtoId rootId)
-    {
-        if (foodId == rootId)
-            return true;
-
-        var pending = new Stack<EntProtoId>();
-        var visited = new HashSet<EntProtoId>();
-        pending.Push(foodId);
-
-        while (pending.TryPop(out var current))
-        {
-            if (!visited.Add(current) ||
-                !_prototypes.TryIndex(current, out EntityPrototype? prototype) ||
-                prototype.Parents == null)
-            {
-                continue;
-            }
-
-            foreach (var parent in prototype.Parents)
-            {
-                if (parent == rootId)
-                    return true;
-                pending.Push(parent);
-            }
-        }
-
-        return false;
-    }
-
-    public void TriggerAllergy(EntityUid uid, AllergyComponent component, AllergyPrototype allergy)
+    /// <param name="exposureUnits">How much allergen was involved; scales duration and intensity.</param>
+    /// <param name="delayedOnset">True for eaten food (1.5s lag). False for blood / tests.</param>
+    public void TriggerAllergy(
+        EntityUid uid,
+        AllergyComponent component,
+        AllergyPrototype allergy,
+        float exposureUnits = 1f,
+        bool delayedOnset = false)
     {
         if (!CanHaveAllergies(uid))
             return;
+
+        exposureUnits = Math.Clamp(exposureUnits, 0.5f, 12f);
 
         var severity = component.Severities.TryGetValue(allergy.ID, out var chosen)
             ? chosen
@@ -379,33 +395,46 @@ public sealed class AllergySystem : EntitySystem
 
         var innate = component.InnateAllergies.Contains(allergy.ID);
 
-        // Species contraindications already inflict their native reagent-metabolism
-        // effects. Avoid stacking generic allergy damage on top of those effects.
         if (!innate)
         {
-            switch (severity)
+            // All severities use a remaining-time reaction; mild/moderate tick poison only.
+            StartOrExtendReaction(uid, allergy, severity, exposureUnits, delayedOnset);
+            if (!delayedOnset &&
+                TryComp<ActiveAllergyReactionComponent>(uid, out var reaction) &&
+                _timing.CurTime >= reaction.DamageStartsAt)
             {
-                case AllergySeverity.Mild:
-                    if (allergy.MildDamage.GetTotal() > 0)
-                        _damageable.TryChangeDamage(uid, allergy.MildDamage, interruptsDoAfters: false);
-                    break;
-                case AllergySeverity.Moderate:
-                    // Stronger mild burst; no sustained airway shutdown.
-                    if (allergy.MildDamage.GetTotal() > 0)
-                    {
-                        _damageable.TryChangeDamage(uid, allergy.MildDamage, interruptsDoAfters: false);
-                        _damageable.TryChangeDamage(uid, allergy.MildDamage, interruptsDoAfters: false);
-                    }
-                    break;
-                case AllergySeverity.Severe:
-                case AllergySeverity.Anaphylaxis:
-                    StartOrExtendReaction(uid, allergy, severity);
-                    // Immediate burst so the first second is already dangerous.
-                    ApplyReactionTick(uid, allergy, severity);
-                    break;
+                ApplyReactionTick(uid, allergy, reaction);
             }
         }
+        else if (severity >= AllergySeverity.Severe)
+        {
+            StartOrExtendReaction(uid, allergy, severity, exposureUnits, delayedOnset);
+            if (!delayedOnset)
+                ClampAirway(uid, severity);
+        }
 
+        // Ingest path uses taste-append instead of a separate popup.
+        if (!delayedOnset)
+            TryShowSymptomPopup(uid, component, severity);
+
+        if (!innate &&
+            allergy.CausesSneezing &&
+            _random.Prob(0.35f))
+            _chat.TryEmoteWithChat(uid, "Sneeze", ChatTransmitRange.GhostRangeLimit);
+    }
+
+    private void TryShowSymptomPopup(EntityUid uid, AllergyComponent component, AllergySeverity severity)
+    {
+        if (_timing.CurTime < component.NextSymptomPopup)
+            return;
+
+        component.NextSymptomPopup = _timing.CurTime + SymptomPopupCooldown;
+        Dirty(uid, component);
+        ShowOnsetPopup(uid, severity);
+    }
+
+    private void ShowOnsetPopup(EntityUid uid, AllergySeverity severity)
+    {
         var symptomMessage = severity switch
         {
             AllergySeverity.Mild => "sol-allergy-symptoms-mild",
@@ -418,48 +447,118 @@ public sealed class AllergySystem : EntitySystem
             Loc.GetString(symptomMessage),
             uid,
             uid,
-            severity >= AllergySeverity.Severe ? PopupType.LargeCaution : PopupType.SmallCaution);
-
-        if (!innate &&
-            allergy.CausesSneezing &&
-            _random.Prob(0.35f))
-            _chat.TryEmoteWithChat(uid, "Sneeze", ChatTransmitRange.GhostRangeLimit);
+            _sharedAllergy.GetCautionPopupType(severity));
     }
 
-    private void StartOrExtendReaction(EntityUid uid, AllergyPrototype allergy, AllergySeverity severity)
+    private void StartOrExtendReaction(
+        EntityUid uid,
+        AllergyPrototype allergy,
+        AllergySeverity severity,
+        float exposureUnits,
+        bool delayedOnset)
     {
-        var duration = severity >= AllergySeverity.Anaphylaxis ? AnaphylaxisDuration : SevereDuration;
-        var endsAt = _timing.CurTime + duration;
+        GetDurationParams(severity, out var secondsPerUnit, out var maxRemaining);
 
+        var isNew = !HasComp<ActiveAllergyReactionComponent>(uid);
         var reaction = EnsureComp<ActiveAllergyReactionComponent>(uid);
-        // Escalate severity if a worse reaction is already running / newly triggered.
+
         if (severity > reaction.Severity || reaction.AllergyId == default)
             reaction.Severity = severity;
 
+        GetDurationParams(reaction.Severity, out secondsPerUnit, out maxRemaining);
+
+        // Remaining-time budget: extend from current end (or now), capped at now + max.
+        var add = TimeSpan.FromSeconds(secondsPerUnit * exposureUnits);
+        var from = reaction.EndsAt > _timing.CurTime ? reaction.EndsAt : _timing.CurTime;
+        var maxEnd = _timing.CurTime + maxRemaining;
+        var desiredEnd = from + add;
+        reaction.EndsAt = desiredEnd < maxEnd ? desiredEnd : maxEnd;
+
         reaction.AllergyId = allergy.ID;
-        reaction.EndsAt = endsAt > reaction.EndsAt ? endsAt : reaction.EndsAt;
-        if (reaction.NextTick < _timing.CurTime)
-            reaction.NextTick = _timing.CurTime;
+        reaction.Intensity = Math.Clamp(reaction.Intensity + exposureUnits * IntensityPerUnit, 1f, MaxIntensity);
+
+        if (isNew || reaction.DamageStartsAt == default)
+        {
+            reaction.DamageStartsAt = delayedOnset
+                ? _timing.CurTime + IngestOnsetDelay
+                : _timing.CurTime;
+            reaction.NextTick = reaction.DamageStartsAt;
+            reaction.OnsetPopupShown = !delayedOnset;
+        }
+
+        if (reaction.NextTick < reaction.DamageStartsAt)
+            reaction.NextTick = reaction.DamageStartsAt;
+
+        if (reaction.Severity >= AllergySeverity.Anaphylaxis && !reaction.AppliedMute)
+        {
+            EnsureComp<MutedComponent>(uid);
+            reaction.AppliedMute = true;
+        }
 
         Dirty(uid, reaction);
+        if (reaction.Severity >= AllergySeverity.Severe)
+            _alerts.ShowAlert(uid, AllergicChokingAlert);
     }
 
-    private void ApplyReactionTick(EntityUid uid, AllergyPrototype allergy, AllergySeverity severity)
+    private static void GetDurationParams(
+        AllergySeverity severity,
+        out float secondsPerUnit,
+        out TimeSpan maxRemaining)
     {
-        var damage = severity >= AllergySeverity.Anaphylaxis
-            ? allergy.AnaphylaxisDamage
-            : allergy.SevereDamage;
-
-        if (damage.GetTotal() > 0)
-            _damageable.TryChangeDamage(uid, damage, interruptsDoAfters: false);
-
-        if (TryComp<RespiratorComponent>(uid, out var respirator))
+        switch (severity)
         {
-            var drain = severity >= AllergySeverity.Anaphylaxis
-                ? AnaphylaxisSaturationDrain
-                : SevereSaturationDrain;
-            _respirator.UpdateSaturation(uid, -drain, respirator);
+            case AllergySeverity.Mild:
+                secondsPerUnit = MildSecondsPerUnit;
+                maxRemaining = MildMaxRemaining;
+                break;
+            case AllergySeverity.Moderate:
+                secondsPerUnit = ModerateSecondsPerUnit;
+                maxRemaining = ModerateMaxRemaining;
+                break;
+            case AllergySeverity.Severe:
+                secondsPerUnit = SevereSecondsPerUnit;
+                maxRemaining = SevereMaxRemaining;
+                break;
+            default:
+                secondsPerUnit = AnaphylaxisSecondsPerUnit;
+                maxRemaining = AnaphylaxisMaxRemaining;
+                break;
         }
+    }
+
+    private void ApplyReactionTick(EntityUid uid, AllergyPrototype allergy, ActiveAllergyReactionComponent reaction)
+    {
+        var baseDamage = reaction.Severity switch
+        {
+            AllergySeverity.Mild => allergy.MildDamage,
+            AllergySeverity.Moderate => allergy.MildDamage * 2f,
+            AllergySeverity.Severe => allergy.SevereDamage,
+            _ => allergy.AnaphylaxisDamage,
+        };
+
+        if (baseDamage.GetTotal() > 0)
+        {
+            var scaled = baseDamage * reaction.Intensity;
+            _damageable.TryChangeDamage(uid, scaled, interruptsDoAfters: false);
+        }
+
+        if (reaction.Severity >= AllergySeverity.Severe)
+            ClampAirway(uid, reaction.Severity);
+    }
+
+    private void ClampAirway(EntityUid uid, AllergySeverity severity)
+    {
+        if (!TryComp<RespiratorComponent>(uid, out var respirator))
+            return;
+
+        var overThreshold = respirator.Saturation - respirator.SuffocationThreshold;
+        if (overThreshold > 0f)
+            _respirator.UpdateSaturation(uid, -overThreshold, respirator);
+
+        var drain = severity >= AllergySeverity.Anaphylaxis
+            ? AnaphylaxisSaturationDrain
+            : SevereSaturationDrain;
+        _respirator.UpdateSaturation(uid, -drain, respirator);
     }
 
     public bool HasAllergy(EntityUid uid, ProtoId<AllergyPrototype> allergyId)
@@ -472,7 +571,8 @@ public sealed class AllergySystem : EntitySystem
     {
         return TryComp<ActiveAllergyReactionComponent>(uid, out var reaction) &&
                reaction.Severity >= AllergySeverity.Severe &&
-               _timing.CurTime < reaction.EndsAt;
+               _timing.CurTime < reaction.EndsAt &&
+               _timing.CurTime >= reaction.DamageStartsAt;
     }
 
     public IEnumerable<string> GetAllergyDisplayNames(EntityUid uid)

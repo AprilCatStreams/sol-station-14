@@ -139,11 +139,14 @@ public enum PathogenPayloadKind : byte
     Aerosol = 2,
 }
 
-[RegisterComponent, NetworkedComponent]
+[RegisterComponent, NetworkedComponent, AutoGenerateComponentState]
 public sealed partial class ClandestineSampleAnalyzerComponent : Component
 {
     [DataField]
     public TimeSpan AnalysisDelay = TimeSpan.FromSeconds(4);
+
+    [DataField, AutoNetworkedField]
+    public bool Processing;
 }
 
 [RegisterComponent, NetworkedComponent, AutoGenerateComponentState]
