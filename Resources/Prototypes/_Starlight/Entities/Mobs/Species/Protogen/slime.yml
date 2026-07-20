@@ -30,7 +30,6 @@
       enum.SurgeryUIKey.Key:
         # Sol-edit: contextual surgery UI (was SurgeryBui)
         type: SolContextualSurgeryBui
-        type: SurgeryBui
   - type: InteractionPopup
     interactSuccessSound: /Audio/Voice/Slime/slime_squish.ogg
   - type: Icon
