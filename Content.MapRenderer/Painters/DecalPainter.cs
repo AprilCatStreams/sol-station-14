@@ -36,7 +36,13 @@ public sealed class DecalPainter
         var stopwatch = new Stopwatch();
         stopwatch.Start();
 
-        decals.Sort(Comparer<DecalData>.Create((x, y) => x.Decal.ZIndex.CompareTo(y.Decal.ZIndex)));
+        // Match Content.Client DecalOverlay: ZIndex first, then stable Id so overlapping
+        // decals (e.g. BrickTileWhite under Starlight corner*white) composite correctly.
+        decals.Sort(Comparer<DecalData>.Create((x, y) =>
+        {
+            var z = x.Decal.ZIndex.CompareTo(y.Decal.ZIndex);
+            return z != 0 ? z : x.Index.CompareTo(y.Index);
+        }));
 
         if (_decalTextures.Count == 0)
         {

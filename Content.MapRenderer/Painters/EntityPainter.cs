@@ -68,6 +68,13 @@ public sealed class EntityPainter
                 continue;
             }
 
+            // Displacement / shader-parameter layers are not drawn; they're sampled by other layers.
+            // Painting them produces solid yellow/green blocks (e.g. kobold clothing displacements).
+            if (layer is SpriteComponent.Layer { CopyToShaderParameters: not null })
+            {
+                continue;
+            }
+
             if (!layer.RsiState.IsValid)
             {
                 continue;
@@ -122,7 +129,7 @@ public sealed class EntityPainter
             if (!new Rectangle(Point.Empty, image.Size).Contains(rect))
             {
                 Console.WriteLine($"Invalid layer {rsi!.Path}/{layer.RsiState.Name}.png for entity {_sEntityManager.ToPrettyString(entity.Owner)} at ({entity.X}, {entity.Y})");
-                return;
+                continue;
             }
 
             image.Mutate(o => o.Crop(rect));
@@ -139,16 +146,22 @@ public sealed class EntityPainter
             coloredImage.Mutate(o => o.BackgroundColor(imageColor));
 
             var (imgX, imgY) = rsi?.Size ?? (EyeManager.PixelsPerMeter, EyeManager.PixelsPerMeter);
-            var offsetX = (int)(entity.Sprite.Offset.X + customOffset.X) * EyeManager.PixelsPerMeter;
-            var offsetY = (int)(entity.Sprite.Offset.Y + customOffset.X) * EyeManager.PixelsPerMeter;
+            // Per-layer offsets (e.g. SmoothEdge) are required for wall edge fills.
+            // Sprite/layer offsets are in local entity space and must rotate with the entity
+            // (e.g. ThrusterLarge offset 0.5,-0.5), matching in-game sprite rendering.
+            var layerOffset = layer is SpriteComponent.Layer spriteLayer ? spriteLayer.Offset : Vector2.Zero;
+            var rotatedOffset = worldRotation.RotateVec(entity.Sprite.Offset + layerOffset);
+            var offsetX = (int)((rotatedOffset.X + customOffset.X) * EyeManager.PixelsPerMeter);
+            var offsetY = (int)((rotatedOffset.Y + customOffset.Y) * EyeManager.PixelsPerMeter);
             image.Mutate(o => o
                 .DrawImage(coloredImage, PixelColorBlendingMode.Multiply, PixelAlphaCompositionMode.SrcAtop, 1)
                 .Resize(imgX, imgY)
                 .Flip(FlipMode.Vertical)
                 .Rotate(spriteRotation));
 
-            var pointX = (int)entity.X + offsetX - imgX / 2;
-            var pointY = (int)entity.Y + offsetY - imgY / 2;
+            // After Rotate, use the actual bitmap size so non-cardinal spins stay centered.
+            var pointX = (int)entity.X + offsetX - image.Width / 2;
+            var pointY = (int)entity.Y + offsetY - image.Height / 2;
             canvas.Mutate(o => o.DrawImage(image, new Point(pointX, pointY), 1));
         }
     }

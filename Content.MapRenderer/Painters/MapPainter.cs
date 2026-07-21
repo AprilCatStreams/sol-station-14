@@ -5,10 +5,12 @@ using System.Linq;
 using System.Numerics;
 using System.IO;
 using System.Threading.Tasks;
+using Content.Client.IconSmoothing;
 using Content.Client.Markers;
 using Content.IntegrationTests;
 using Content.IntegrationTests.Pair;
 using Content.Server.GameTicking;
+using Content.Shared.IconSmoothing;
 using Robust.Client.GameObjects;
 using Robust.Server.GameObjects;
 using Robust.Server.Player;
@@ -158,7 +160,6 @@ namespace Content.MapRenderer.Painters
             await Task.WhenAll(client.WaitIdleAsync(), server.WaitIdleAsync());
 
             var tilePainter = new TilePainter(client, server);
-            var entityPainter = new GridPainter(client, server);
             var xformQuery = sEntityManager.GetEntityQuery<TransformComponent>();
             var xformSystem = sEntityManager.System<SharedTransformSystem>();
 
@@ -188,8 +189,16 @@ namespace Content.MapRenderer.Painters
                 }
             });
 
-            // Was RunTicksSync(200) (Starlight); that stalls full-batch runs with no logs.
-            await _pair.RunTicksSync(10);
+            // Give the client time to receive the full grid and apply IconSmooth.
+            // Capturing GridPainter before this left wall corners/door frames incomplete.
+            const int syncTicks = 60;
+            Console.WriteLine($"Syncing client/server for map render ({syncTicks} ticks)...");
+            for (var i = 0; i < syncTicks; i += 10)
+            {
+                await _pair.RunTicksSync(Math.Min(10, syncTicks - i));
+                Console.WriteLine($"  map render sync {Math.Min(i + 10, syncTicks)}/{syncTicks}");
+            }
+
             await Task.WhenAll(client.WaitIdleAsync(), server.WaitIdleAsync());
 
             await server.WaitPost(() =>
@@ -200,6 +209,27 @@ namespace Content.MapRenderer.Painters
                     xformSystem.SetWorldRotation(xform, Angle.Zero);
                 }
             });
+
+            // Force a full IconSmooth pass now that every wall should exist on the client.
+            await client.WaitPost(() =>
+            {
+                var smooth = client.System<IconSmoothSystem>();
+                var query = client.EntMan.AllEntityQueryEnumerator<IconSmoothComponent>();
+                var count = 0;
+                while (query.MoveNext(out var uid, out _))
+                {
+                    smooth.DirtyNeighbours(uid);
+                    count++;
+                }
+
+                Console.WriteLine($"Dirtied {count} IconSmooth entities for map render");
+            });
+
+            await _pair.RunTicksSync(5);
+            await Task.WhenAll(client.WaitIdleAsync(), server.WaitIdleAsync());
+
+            // Capture sprites/decals only after sync + IconSmooth have settled.
+            var entityPainter = new GridPainter(client, server);
 
             foreach (var (uid, grid) in _grids)
             {
@@ -219,6 +249,9 @@ namespace Content.MapRenderer.Painters
                 var w = (maxX - minX + 1) * tileXSize;
                 var h = (maxY - minY + 1) * tileYSize;
                 var customOffset = new Vector2();
+
+                Console.WriteLine(
+                    $"Grid {uid} LocalAABB={grid.LocalAABB} tileBounds=({minX},{minY})-({maxX},{maxY}) canvas={w}x{h}");
 
                 //MapGrids don't have LocalAABB, so we offset them to align the bottom left corner with 0,0 coordinates
                 if (grid.LocalAABB.IsEmpty())

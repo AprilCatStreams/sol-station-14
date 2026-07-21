@@ -127,18 +127,17 @@ namespace Content.MapRenderer.Painters
 
             while (query.MoveNext(out var uid, out var grid))
             {
-                // TODO this needs to use the client entity manager because the client
-                // actually has the correct z-indices for decals for some reason when the server doesn't,
-                // BUT can't do that yet because the client hasn't actually received everything yet
-                // for some reason decal moment i guess.
+                // Use the server decal grid so every baked + variation decal is present.
+                // (Client z-order can differ slightly, but missing decals are worse.)
                 if (_sEntityManager.TryGetComponent<DecalGridComponent>(uid, out var comp))
                 {
                     foreach (var chunk in comp.ChunkCollection.ChunkCollection.Values)
                     {
-                        foreach (var decal in chunk.Decals.Values)
+                        // Include decal indices so paint order matches DecalOverlay (ZIndex, then Id).
+                        foreach (var (decalId, decal) in chunk.Decals)
                         {
                             var (x, y) = TransformLocalPosition(decal.Coordinates, grid);
-                            decals.GetOrNew(uid).Add(new DecalData(decal, x, y));
+                            decals.GetOrNew(uid).Add(new DecalData(decal, decalId, x, y));
                         }
                     }
                 }

@@ -31,7 +31,12 @@ if not CHANGELOG_API_PATH.startswith("/"):
 
 
 def http_json(method: str, url: str, data: bytes | None = None, headers: dict | None = None):
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    # Cloudflare Bot Fight Mode returns 403 / error 1010 for Python's default UA.
+    hdrs = {
+        "User-Agent": "SolChangelog/1.0 (+https://playsol.us)",
+        **(headers or {}),
+    }
+    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
     with urllib.request.urlopen(req, timeout=60) as resp:
         body = resp.read()
         if not body:
@@ -74,6 +79,7 @@ def main() -> int:
             },
         )
     except urllib.error.HTTPError as e:
+        print(f"HTTP {e.code} {e.reason}", file=sys.stderr)
         print(e.read().decode(errors="replace"), file=sys.stderr)
         raise
 
