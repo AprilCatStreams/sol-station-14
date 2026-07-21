@@ -160,13 +160,20 @@ def map_ids_from_changed_paths(paths: list[str]) -> list[str]:
 
 
 def rebuild_list_json(map_out: Path, existing_list: Path | None, out_path: Path) -> None:
-    """Build maps/list.json from rendered map.json files, merging untouched entries."""
+    """Build maps/list.json from rendered map.json files, merging untouched entries.
+
+    Drops superseded Starlight ids (Sol twin under Maps/_Sol/Stations) so merge
+    uploads do not keep StarlightPacked etc. alongside SolPacked.
+    """
+    skip = superseded_starlight_ids()
     by_id: dict[str, dict[str, str]] = {}
     if existing_list and existing_list.is_file():
         try:
             data = json.loads(existing_list.read_text(encoding="utf-8"))
             for entry in data.get("maps", []):
                 if isinstance(entry, dict) and "id" in entry and "name" in entry:
+                    if entry["id"] in skip:
+                        continue
                     by_id[entry["id"]] = {"id": entry["id"], "name": entry["name"]}
         except (json.JSONDecodeError, OSError):
             pass
@@ -183,6 +190,8 @@ def rebuild_list_json(map_out: Path, existing_list: Path | None, out_path: Path)
             except (json.JSONDecodeError, OSError):
                 continue
             mid = data.get("id") or child.name
+            if mid in skip:
+                continue
             name = data.get("displayName") or data.get("name") or mid
             by_id[mid] = {"id": mid, "name": name}
 
