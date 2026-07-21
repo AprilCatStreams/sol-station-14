@@ -189,13 +189,10 @@ namespace Content.IntegrationTests.Tests
             // Starlight End
                 await server.WaitPost(() =>
                 {
-                    mapSys.CreateMap(out var mapId);
-                    var grid = mapSys.CreateGridEntity(mapId);
-                    var ent = sEntMan.SpawnEntity(protoId, new EntityCoordinates(grid.Owner, 0.5f, 0.5f));
-                    foreach (var (_, component) in sEntMan.GetNetComponents(ent))
+                    foreach (var protoId in batch)
                     {
                         mapSys.CreateMap(out var mapId);
-                        var grid = mapManager.CreateGridEntity(mapId);
+                        var grid = mapSys.CreateGridEntity(mapId);
                         var ent = sEntMan.SpawnEntity(protoId, new EntityCoordinates(grid.Owner, 0.5f, 0.5f));
                         foreach (var (_, component) in sEntMan.GetNetComponents(ent))
                         {

@@ -28,12 +28,8 @@
       enum.StoreUiKey.Key:
         type: StoreBoundUserInterface
       enum.SurgeryUIKey.Key:
-<<<<<<< HEAD
         # Sol-edit: contextual surgery UI (was SurgeryBui)
         type: SolContextualSurgeryBui
-=======
-        type: SurgeryBui
->>>>>>> sl/starlight-dev
   - type: InteractionPopup
     interactSuccessSound: /Audio/Voice/Slime/slime_squish.ogg
   - type: Icon
