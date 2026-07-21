@@ -32,6 +32,7 @@ public sealed partial class ChatUIController : IOnSystemChanged<CharacterInfoSys
     private string? _highlightsColor;
 
     private bool _autoFillHighlightsEnabled;
+    private string _autoHighlights = ""; // Starlight
 
     /// <summary>
     ///     The boolean that keeps track of the 'OnCharacterUpdated' event, whenever it's a player attaching or opening the character info panel.
@@ -80,9 +81,10 @@ public sealed partial class ChatUIController : IOnSystemChanged<CharacterInfoSys
         // If auto highlights are enabled generate a request for new character info
         // that will be used to determine the highlights.
         _charInfoIsAttach = true;
-        _characterInfo.RequestCharacterInfo();
+        _characterInfo?.RequestCharacterInfo(); // Starlight
     }
 
+    // Starlight Start
     public void UpdateHighlights(string newHighlights, bool firstLoad = false)
     {
         // Do nothing if the provided highlights are the same as the old ones and it is not the first time.
@@ -92,11 +94,26 @@ public sealed partial class ChatUIController : IOnSystemChanged<CharacterInfoSys
         _config.SetCVar(CCVars.ChatHighlights, newHighlights);
         _config.SaveToFile();
 
+        ReloadHighlights();
+        HighlightsUpdated?.Invoke(newHighlights);
+    }
+
+    public void ReloadHighlights()
+    {
         _highlights.Clear();
+
+        var combined = _config.GetCVar(CCVars.ChatHighlights);
+        if (_autoFillHighlightsEnabled && !string.IsNullOrEmpty(_autoHighlights))
+        {
+            if (string.IsNullOrEmpty(combined))
+                combined = _autoHighlights;
+            else
+                combined += "\n" + _autoHighlights;
+        }
 
         // We first subdivide the highlights based on newlines to prevent replacing
         // a valid "\n" tag and adding it to the final regex.
-        var splittedHighlights = newHighlights.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var splittedHighlights = combined.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         for (var i = 0; i < splittedHighlights.Length; i++)
         {
@@ -134,6 +151,7 @@ public sealed partial class ChatUIController : IOnSystemChanged<CharacterInfoSys
         // the full word (eg. "Security") gets picked before the abbreviation (eg. "Sec").
         _highlights.Sort((x, y) => y.Length.CompareTo(x.Length));
     }
+    // Starlight End
 
     private void OnCharacterUpdated(CharacterData data)
     {
@@ -169,8 +187,10 @@ public sealed partial class ChatUIController : IOnSystemChanged<CharacterInfoSys
         if (_loc.TryGetString($"highlights-{jobKey}", out var jobMatches))
             newHighlights += '\n' + jobMatches.Replace(", ", "\n");
 
-        UpdateHighlights(newHighlights);
-        HighlightsUpdated?.Invoke(newHighlights);
+        // Starlight Start
+        _autoHighlights = newHighlights;
+        ReloadHighlights();
+        // Starlight End
         _charInfoIsAttach = false;
     }
 }
