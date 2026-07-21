@@ -186,16 +186,11 @@ def rebuild_list_json(map_out: Path, existing_list: Path | None, out_path: Path)
             name = data.get("displayName") or data.get("name") or mid
             by_id[mid] = {"id": mid, "name": name}
 
-    # Keep pool order for eligible maps, then any extras
-    ordered: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for mid in eligible_map_ids():
-        if mid in by_id:
-            ordered.append(by_id[mid])
-            seen.add(mid)
-    for mid, entry in sorted(by_id.items()):
-        if mid not in seen:
-            ordered.append(entry)
+    # Alphabetical by display name (case-insensitive)
+    ordered = sorted(
+        by_id.values(),
+        key=lambda e: (e.get("name") or e.get("id") or "").casefold(),
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps({"maps": ordered}, indent=2) + "\n", encoding="utf-8")

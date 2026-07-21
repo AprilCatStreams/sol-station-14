@@ -18,15 +18,35 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-API_BASE = os.environ.get("PLAYSOL_API_BASE", "").rstrip("/")
-DEPLOY_SECRET = os.environ.get("PLAYSOL_DEPLOY_SECRET", "")
-AUTH_PATH = os.environ.get("PLAYSOL_AUTH_PATH", "").strip()
-MAPS_UPLOAD_PATH = os.environ.get("PLAYSOL_MAPS_UPLOAD_PATH", "/api/v1/maps/upload")
-MAPS_INIT_PATH = os.environ.get("PLAYSOL_MAPS_INIT_PATH", "/api/v1/maps/upload/init")
-# Public URL to fetch existing list.json when merging (optional)
-MAPS_LIST_URL = os.environ.get("PLAYSOL_MAPS_LIST_URL", "").strip()
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _env(*names: str, default: str = "") -> str:
+    for name in names:
+        v = os.environ.get(name)
+        if v is not None and str(v).strip() != "":
+            return str(v).strip()
+    return default
+
+
+def load_config() -> tuple[str, str, str, str, str, str]:
+    """Resolve PlaySol upload config (PLAYSOL_* preferred; SolDocs DEPLOY_* aliases accepted)."""
+    api_base = _env("PLAYSOL_API_BASE", "API_BASE").rstrip("/")
+    deploy_secret = _env("PLAYSOL_DEPLOY_SECRET", "DEPLOY_SECRET")
+    auth_path = _env("PLAYSOL_AUTH_PATH", "DEPLOY_AUTH_PATH")
+    maps_upload = _env("PLAYSOL_MAPS_UPLOAD_PATH", default="/api/v1/maps/upload")
+    maps_init = _env("PLAYSOL_MAPS_INIT_PATH", default="/api/v1/maps/upload/init")
+    maps_list = _env("PLAYSOL_MAPS_LIST_URL")
+    return api_base, deploy_secret, auth_path, maps_upload, maps_init, maps_list
+
+
+# Populated in main() so tests/imports don't freeze empty values.
+API_BASE = ""
+DEPLOY_SECRET = ""
+AUTH_PATH = ""
+MAPS_UPLOAD_PATH = "/api/v1/maps/upload"
+MAPS_INIT_PATH = "/api/v1/maps/upload/init"
+MAPS_LIST_URL = ""
 
 
 def _norm_path(p: str) -> str:
@@ -199,13 +219,34 @@ def upload_zip(token: str, zip_path: Path, mode: str) -> None:
 
 
 def main() -> int:
+    global API_BASE, DEPLOY_SECRET, AUTH_PATH, MAPS_UPLOAD_PATH, MAPS_INIT_PATH, MAPS_LIST_URL
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--map-out", type=Path, required=True)
     parser.add_argument("--mode", choices=("all", "merge"), default="merge")
     args = parser.parse_args()
 
-    if not API_BASE or not DEPLOY_SECRET:
-        print("PLAYSOL_API_BASE and PLAYSOL_DEPLOY_SECRET are required", file=sys.stderr)
+    API_BASE, DEPLOY_SECRET, AUTH_PATH, MAPS_UPLOAD_PATH, MAPS_INIT_PATH, MAPS_LIST_URL = (
+        load_config()
+    )
+
+    missing: list[str] = []
+    if not API_BASE:
+        missing.append("PLAYSOL_API_BASE")
+    if not DEPLOY_SECRET:
+        missing.append("PLAYSOL_DEPLOY_SECRET (or DEPLOY_SECRET)")
+    if not AUTH_PATH:
+        missing.append("PLAYSOL_AUTH_PATH (or DEPLOY_AUTH_PATH)")
+    if missing:
+        print(
+            "Missing required env: "
+            + ", ".join(missing)
+            + "\nNote: CI must set these as GitHub Actions secrets on the workflow's "
+            "`environment` (this workflow uses `prod`). Local SolDocs `.env` uses "
+            "DEPLOY_SECRET / DEPLOY_AUTH_PATH — those aliases are accepted, but "
+            "PLAYSOL_API_BASE must still be set (e.g. https://playsol.us).",
+            file=sys.stderr,
+        )
         return 1
     if not args.map_out.is_dir():
         print(f"Missing map-out directory: {args.map_out}", file=sys.stderr)

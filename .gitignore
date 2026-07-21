@@ -303,6 +303,8 @@ desktop.ini
 
 # Images generated using the MapRenderer
 Resources/MapImages
+# Local MapRenderer viewer output (CI uploads to PlaySol; do not commit)
+/map-out/
 
 ## Docfx stuff
 /Content.Docfx/api/
