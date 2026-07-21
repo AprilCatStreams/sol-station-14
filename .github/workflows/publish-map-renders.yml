@@ -9,7 +9,7 @@ concurrency:
 on:
   workflow_dispatch:
   push:
-    branches: [Sol, master]
+    branches: [Sol, sol-dev]
     paths:
       - "Resources/Maps/**"
       - "Resources/Prototypes/_Sol/Maps/**"
