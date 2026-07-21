@@ -3,6 +3,12 @@
 import subprocess
 from typing import Iterable
 
+# Generated map viewer assets (JSON/WebP) — skip final-newline enforcement.
+SKIP_FINAL_NEWLINE_PREFIXES = (
+    "map-out/",
+)
+
+
 def main() -> int:
     any_failed = False
     for file_name in get_text_files():
@@ -17,11 +23,19 @@ def main() -> int:
             print(f"::error file={file_name},title=Trailing whitespace::The file '{file_name}' has trailing whitespace on line(s): {lines_str}{suffix}. Please remove trailing spaces/tabs.")
             any_failed = True
 
+        if skip_final_newline_check(file_name):
+            continue
+
         if not has_final_newline(file_name):
             print(f"::error file={file_name},title=Missing final newline::The file '{file_name}' does not end with a newline. Please add a final newline.")
             any_failed = True
 
     return 1 if any_failed else 0
+
+
+def skip_final_newline_check(path: str) -> bool:
+    norm = path.replace("\\", "/")
+    return any(norm.startswith(prefix) for prefix in SKIP_FINAL_NEWLINE_PREFIXES)
 
 
 def get_text_files() -> Iterable[str]:

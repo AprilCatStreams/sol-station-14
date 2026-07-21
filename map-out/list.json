@@ -5,6 +5,14 @@
       "name": "Bagel Station"
     },
     {
+      "id": "StarlightBox",
+      "name": "Box Station"
+    },
+    {
+      "id": "StarlightCluster",
+      "name": "Cluster"
+    },
+    {
       "id": "StarlightCog",
       "name": "Cog"
     },
@@ -13,12 +21,20 @@
       "name": "Cork Outpost"
     },
     {
+      "id": "StarlightElkridge",
+      "name": "Elkridge Depot"
+    },
+    {
       "id": "StarlightFland",
       "name": "Fland Installation"
     },
     {
       "id": "StarlightHotel",
       "name": "Hotel"
+    },
+    {
+      "id": "StarlightKiloton",
+      "name": "Kiloton Station"
     },
     {
       "id": "StarlightLagan",
@@ -49,6 +65,18 @@
       "name": "Orwell \"Citadel\" Station"
     },
     {
+      "id": "StarlightPacked",
+      "name": "Packed"
+    },
+    {
+      "id": "StarlightPlasma",
+      "name": "Plasma"
+    },
+    {
+      "id": "StarlightPrism",
+      "name": "Prism Station"
+    },
+    {
       "id": "SolReach",
       "name": "Reach"
     },
@@ -61,48 +89,20 @@
       "name": "Sepultum Station"
     },
     {
-      "id": "StarlightStarboard",
-      "name": "Starboard"
-    },
-    {
-      "id": "StarlightKiloton",
-      "name": "Kiloton Station"
-    },
-    {
-      "id": "StarlightElkridge",
-      "name": "Elkridge Depot"
-    },
-    {
-      "id": "StarlightPrism",
-      "name": "Prism Station"
+      "id": "StarlightSerpentcrest",
+      "name": "Serpentcrest"
     },
     {
       "id": "StarlightSilica",
       "name": "Silica Station"
     },
     {
-      "id": "StarlightCluster",
-      "name": "Cluster"
-    },
-    {
-      "id": "StarlightBox",
-      "name": "Box Station"
-    },
-    {
-      "id": "StarlightPlasma",
-      "name": "Plasma"
-    },
-    {
-      "id": "StarlightPacked",
-      "name": "Packed"
-    },
-    {
       "id": "StarlightSpaceMall",
       "name": "Space Mall"
     },
     {
-      "id": "StarlightSerpentcrest",
-      "name": "Serpentcrest"
+      "id": "StarlightStarboard",
+      "name": "Starboard"
     }
   ]
 }
